@@ -15,6 +15,7 @@ notebook/credentials.json
 
 # Data
 .csv
+mlflow.db
 
 # Folder
 data/
