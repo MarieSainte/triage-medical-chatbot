@@ -3,7 +3,7 @@ name: GCP Docker Push
 on:
   push:
     branches:
-      - prod
+      - main
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
