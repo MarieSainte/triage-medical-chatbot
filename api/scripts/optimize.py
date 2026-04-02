@@ -3,10 +3,13 @@ import dspy
 from dspy.teleprompt import BootstrapFewShot
 from scripts.data_training_dspy import trainset
 
+import time
+time.sleep(15)
+
 # 1. Config
 vllm = dspy.LM(
     model="openai/medical_lora", 
-    api_base="http://127.0.0.1:8000/v1", 
+    api_base="http://vllm:8000/v1", 
     api_key="EMPTY"
 )
 dspy.settings.configure(lm=vllm)

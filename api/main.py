@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database.database import engine
 from database import models
-from controllers.triage_controller import triage
+from controllers import triage_controller
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -18,7 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(triage.router)
+app.include_router(triage_controller.router)
 
 @app.get("/health", tags=["System"])
 def health_check():

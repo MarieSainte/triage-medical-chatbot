@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from api.services import chatbot as service
-from api.schemas import triage 
-from api.database.database import get_db
+from services import chatbot as service
+from schemas import triage 
+from database.database import get_db
 
 router = APIRouter(prefix="/triage", tags=["Triage"])
 

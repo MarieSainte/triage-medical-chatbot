@@ -1,0 +1,41 @@
+name: GCP Docker Push
+
+on:
+  push:
+    branches:
+      - prod
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: europe-west1
+  # Remplacer 'mon-repo-docker' par le nom de votre Artifact Registry
+  GAR_LOCATION: europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/mon-repo-docker
+  API_IMAGE: medical-chatbot-api
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      - name: Build API Docker Image
+        run: docker build -t ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:${{ github.sha }} -t ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:latest ./api
+
+      - name: Push API Docker Image
+        run: |
+          docker push ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:latest
+
+      # Note: Le modèle VLLM utilisera l'image docker officielle "vllm/vllm-openai:latest" directement sur l'instance GCP (Compute Engine / GKE).

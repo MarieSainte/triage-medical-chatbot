@@ -1,0 +1,50 @@
+﻿api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/click/core.py", line 1406, in main
+api-1  |     rv = self.invoke(ctx)
+api-1  |          ^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/click/core.py", line 1269, in invoke
+api-1  |     return ctx.invoke(self.callback, **ctx.params)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/click/core.py", line 824, in invoke
+api-1  |     return callback(*args, **kwargs)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/main.py", line 433, in main
+api-1  |     run(
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/main.py", line 606, in run
+api-1  |     server.run()
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 75, in run
+api-1  |     return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/asyncio/runners.py", line 195, in run
+api-1  |     return runner.run(main)
+api-1  |            ^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/asyncio/runners.py", line 118, in run
+api-1  |     return self._loop.run_until_complete(task)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 79, in serve
+api-1  |     await self._serve(sockets)
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/server.py", line 86, in _serve
+api-1  |     config.load()
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/config.py", line 441, in load
+api-1  |     self.loaded_app = import_from_string(self.app)
+api-1  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/importer.py", line 19, in import_from_string
+api-1  |     module = importlib.import_module(module_str)
+api-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "/usr/local/lib/python3.12/importlib/__init__.py", line 90, in import_module
+api-1  |     return _bootstrap._gcd_import(name[level:], package, level)
+api-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+api-1  |   File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+api-1  |   File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+api-1  |   File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+api-1  |   File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+api-1  |   File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+api-1  |   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+api-1  |   File "/app/main.py", line 5, in <module>
+api-1  |     from controllers.triage_controller import triage
+api-1  |   File "/app/controllers/triage_controller.py", line 3, in <module>
+api-1  |     from services import chatbot as service
+api-1  |   File "/app/services/chatbot.py", line 7, in <module>
+api-1  |     from dspy.signatures import TriageModule
+api-1  | ImportError: cannot import name 'TriageModule' from 'dspy.signatures' (/usr/local/lib/python3.12/site-packages/dspy/signatures/__init__.py)

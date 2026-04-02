@@ -2,25 +2,25 @@ import os
 import logging
 from sqlalchemy.orm import Session
 from openai import APIConnectionError, APITimeoutError
-from api.database import models
+from database import models
 import dspy
-from api.dspy.signatures import TriageModule
+from dspy_custom.signatures import TriageModule
 
 # Configuration du logger pour voir les erreurs dans les logs Docker/GCP
 logger = logging.getLogger(__name__)
 
 VLLM_API_URL = os.getenv("VLLM_API_URL")
 
-vllm_endpoint = dspy.HFClientVLLM(
-    model="medical_lora", 
-    port=8000, 
-    url=os.getenv("VLLM_API_URL")
+vllm_endpoint = dspy.LM(
+    model="openai/medical_lora",
+    api_base=VLLM_API_URL,
+    api_key="EMPTY"
 )
 dspy.settings.configure(lm=vllm_endpoint)
 
 triage_app = TriageModule()
 
-json_path = os.path.join(os.path.dirname(__file__), "..", "dspy", "optimized_triage.json")
+json_path = os.path.join(os.path.dirname(__file__), "..", "dspy_custom", "optimized_triage.json")
 if os.path.exists(json_path):
     triage_app.load(json_path)
     logger.info("Cerveau DSPy chargé avec succès depuis le JSON.")
@@ -32,7 +32,7 @@ def generate_triage(symptomes: str) -> str:
     Appelle le modèle d'IA avec gestion d'erreurs robuste.
     """
     try:
-        prediction = triage_module(symptomes=symptomes)
+        prediction = triage_app(symptomes=symptomes)
 
         reponse_formatee = (
             f"### {prediction.niveau_urgence}\n"

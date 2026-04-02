@@ -21,6 +21,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    ports:
+      - "8000:8000"
     volumes:
       - hf_cache:/root/.cache/huggingface
       - ${MODEL_PATH}:/app/model_lora
@@ -30,6 +32,7 @@ services:
       --enable-lora
       --lora-modules medical_lora=/app/model_lora
       --max-model-len 2048
+      --gpu-memory-utilization 0.7
 
   api:
     build: ./api
