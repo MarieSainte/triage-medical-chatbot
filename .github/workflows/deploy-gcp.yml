@@ -3,7 +3,7 @@ name: GCP Docker Push
 on:
   push:
     branches:
-      - main
+      - prod
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -31,6 +31,12 @@ jobs:
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify gcloud auth
+        run: |
+          gcloud config set project ${{ env.PROJECT_ID }}
+          gcloud auth list
+          gcloud config get-value project
 
       - name: Configure Docker
         run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
