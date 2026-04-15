@@ -16,6 +16,8 @@ notebook/credentials.json
 # Data
 .csv
 mlflow.db
+install_requirements.txt
+example_demo.txt
 
 # Folder
 data/
