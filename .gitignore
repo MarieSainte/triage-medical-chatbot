@@ -21,3 +21,6 @@ mlflow.db
 data/
 mlruns/
 models/checkpoint-*/
+models/
+models_test/
+unsloth_compiled_cache/
