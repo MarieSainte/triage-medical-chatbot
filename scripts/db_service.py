@@ -17,7 +17,6 @@ class GSheetsDB:
         # Ouvrir le fichier
         self.sheet = self.client.open(spreadsheet_name).sheet1
         
-        # Initialiser les colonnes si la feuille est vide
         if not self.sheet.row_values(1):
             self.sheet.append_row(["date", 
                                    "id_cas",
@@ -53,7 +52,6 @@ class GSheetsDB:
         liste_cas_cliniques = []
         
         for ligne in lignes_donnees:
-            # Ordre basé sur row = [now, id_cas, prompt, reponse, metadata_json, symptomes_str]
             try:
                 # On essaie de parser le JSON des métadonnées s'il existe
                 metadata = {}
