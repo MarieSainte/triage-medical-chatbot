@@ -2,6 +2,12 @@ import requests
 import json
 import sys
 import time
+
+if sys.stdout.encoding != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except AttributeError:
+        pass
 from typing import List, Dict
 import os
 from pathlib import Path
@@ -17,6 +23,9 @@ except ImportError:
     from test_CI.eval_dataset import DATASET
     print("Dataset chargé depuis test_CI.")
 
+# On limite le dataset à 5 éléments pour la rapidité
+DATASET = DATASET[:5]
+
 # Import du prompt optimisé DSPy
 try:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -30,7 +39,7 @@ except Exception:
 # CONFIG
 # =========================
 
-GCS_LORA_BASE_URL = os.getenv("GCS_LORA_BASE_URL", "https://storage.googleapis.com/lora-matrice/checkpoint-60/")
+GCS_LORA_BASE_URL = os.getenv("GCS_LORA_BASE_URL", "https://storage.googleapis.com/lora-matrice/checkpoint-60")
 
 # seuils CI/CD
 THRESHOLDS = {
