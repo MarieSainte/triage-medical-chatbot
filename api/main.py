@@ -7,7 +7,10 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from database.database import engine
 from database import models
 from controllers import triage_controller
-from api.core.logs import setup_logging
+try:
+    from core.logs import setup_logging          # Docker (WORKDIR = /app = contenu de api/)
+except ImportError:
+    from api.core.logs import setup_logging      # execution locale depuis la racine du projet
 
 setup_logging()
 logger = logging.getLogger("medical-chatbot-api")

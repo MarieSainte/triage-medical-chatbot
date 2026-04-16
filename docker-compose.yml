@@ -36,7 +36,7 @@ services:
       - lora_cache:/app/model_lora
     environment:
       - HF_TOKEN=${HF_TOKEN}
-      - GCS_LORA_BASE_URL=${GCS_LORA_BASE_URL:-https://storage.googleapis.com/lora-matrice}
+      - GCS_LORA_BASE_URL=${GCS_LORA_BASE_URL:-https://storage.googleapis.com/lora-matrice/checkpoint-60}
       - MODEL_ID=Qwen/Qwen3-1.7B-Base
       - VLLM_DTYPE=float16
     entrypoint: >
@@ -58,7 +58,7 @@ services:
           --dtype $$VLLM_DTYPE
           --enable-lora
           --lora-modules medical_lora=/app/model_lora
-          --max-model-len 1024
+          --max-model-len 2048
           --max-lora-rank 16
           --gpu-memory-utilization 0.85
           --port 8000

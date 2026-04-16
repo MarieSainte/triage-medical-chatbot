@@ -21,6 +21,7 @@ class TriageResponse(BaseModel):
     status: str
     data: Optional[Any] = None
     question: Optional[str] = None
+    message: Optional[str] = None
     latency: Optional[float] = None
 
 

@@ -1,14 +1,16 @@
-import requests
 import json
 import sys
+import re
+import os
 
 if sys.stdout.encoding != "utf-8":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-from typing import List, Dict
-import os
+
+import requests
+from typing import Dict, List, Optional
 from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -17,41 +19,52 @@ from peft import PeftModel
 # Import du dataset
 try:
     from eval_dataset import DATASET
-    print("Dataset chargé.")
+    print("Dataset charge.")
 except ImportError:
     from test_CI.eval_dataset import DATASET
-    print("Dataset chargé depuis test_CI.")
+    print("Dataset charge depuis test_CI.")
 
-# On limite le dataset à 5 éléments pour la rapidité
-DATASET = DATASET[:5]
-
-# Import du prompt optimisé DSPy
+# Import du prompt optimise DSPy
 try:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
     from api.dspy.signatures import OPTIMIZED_SYSTEM_PROMPT
-    print("Prompt optimisé chargé.")
+    print("Prompt optimise charge.")
 except Exception:
     OPTIMIZED_SYSTEM_PROMPT = None
-
 
 # =========================
 # CONFIG
 # =========================
 
-GCS_LORA_BASE_URL = os.getenv("GCS_LORA_BASE_URL", "https://storage.googleapis.com/lora-matrice/checkpoint-60")
+# CI rapide : 5 premiers exemples. Eval complete locale : EVAL_SAMPLE_LIMIT=10
+CI_SAMPLE_LIMIT = int(os.getenv("EVAL_SAMPLE_LIMIT", "5"))
+EVAL_DATASET    = DATASET[:CI_SAMPLE_LIMIT]
 
-# seuils CI/CD
+GCS_LORA_BASE_URL = os.getenv(
+    "GCS_LORA_BASE_URL", "https://storage.googleapis.com/lora-matrice/checkpoint-60"
+)
+MODEL_ID = os.getenv("MODEL_ID", "Qwen/Qwen3-1.7B-Base")
+
+LABELS = ["Haute", "Moyenne", "Faible", "question"]
+
+# Seuils CI/CD
+# recall_haute : critique securite patient — ne pas rater un cas urgent
+# accuracy     : souple car le modele est medicalement conservateur (sur-triage plutot qu'evitement)
 THRESHOLDS = {
-    "recall_haute": 0.80,
-    "accuracy": 0.60
+    "recall_haute": 0.90,
+    "accuracy":     0.50,
 }
 
+# =========================
+# LOCAL MODEL CALLER
+# =========================
+
 class LocalModelCaller:
-    def __init__(self, model_id="Qwen/Qwen3-1.7B-Base", adapter_path=None):
+    def __init__(self, model_id: str = MODEL_ID, adapter_path: Optional[str] = None):
         if adapter_path:
             self.ensure_adapter(adapter_path)
 
-        print(f"Loading model {model_id} on CPU...")
+        print(f"Chargement du modele {model_id} sur CPU...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -65,222 +78,225 @@ class LocalModelCaller:
         )
 
         if adapter_path:
-            print(f"Loading adapter from {adapter_path}...")
+            print(f"Chargement de l adaptateur depuis {adapter_path}...")
             self.model = PeftModel.from_pretrained(self.model, adapter_path)
-        
+
         self.model.eval()
-        
-        # Configuration du template ChatML
-        self.tokenizer.chat_template = (
-            "{% for message in messages %}"
-            "{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n'}}"
-            "{% endfor %}"
-        )
-        
+
         if OPTIMIZED_SYSTEM_PROMPT:
-            print(" Using optimized DSPy system prompt.")
+            print("Prompt DSPy optimise utilise.")
             self.system_prompt = OPTIMIZED_SYSTEM_PROMPT
         else:
-            print(" Warning: optimized prompt not found, using fallback.")
-            self.system_prompt = """Tu es un médecin urgentiste chargé de trier des situations cliniques.
-Ton objectif est de décider entre deux actions :
-- POSER UNE QUESTION si les informations sont insuffisantes ou ambiguës
-- DONNER UN VERDICT MÉDICAL STRUCTURÉ si les informations sont suffisantes
-Règles :
-1. Tu dois toujours répondre au format JSON strict.
-2. Si les informations sont insuffisantes, pose UNE seule question ciblée.
-3. Si les informations sont suffisantes, donne une analyse médicale avec un niveau d'urgence.
-4. L'urgence doit être strictement : "Haute", "Moyenne" ou "Faible".
-5. Ne jamais inclure de texte hors JSON.
-6. Sois concis, médicalement prudent et factuel.
-Format attendu :
-{
-  "type": "question",
-  "question": "...",
-  "urgence": null,
-  "analyse": null
-}
-ou
-{
-  "type": "final",
-  "question": null,
-  "urgence": "...",
-  "analyse": "..."
-}"""
+            print("Avertissement : prompt optimise absent, prompt de secours utilise.")
+            self.system_prompt = (
+                "Tu es un medecin urgentiste charge de trier des situations cliniques. "
+                "Reponds UNIQUEMENT en JSON : "
+                '{"type":"final","question":null,"urgence":"Haute|Moyenne|Faible","analyse":"..."} '
+                'ou {"type":"question","question":"...","urgence":null,"analyse":null}'
+            )
 
     def ensure_adapter(self, adapter_path: str):
         """Telecharge les matrices LoRA depuis GCS si elles sont absentes."""
         path = Path(adapter_path)
         path.mkdir(parents=True, exist_ok=True)
-        
-        files = ["adapter_config.json", "adapter_model.safetensors"]
-        
-        for filename in files:
+
+        for filename in ["adapter_config.json", "adapter_model.safetensors"]:
             file_path = path / filename
             if not file_path.exists():
                 url = f"{GCS_LORA_BASE_URL}/{filename}"
-                print(f"📥 Téléchargement de {filename} depuis {url}...")
+                print(f"Telechargement de {filename} depuis {url}...")
                 try:
-                    r = requests.get(url, stream=True, timeout=60)
+                    r = requests.get(url, stream=True, timeout=120)
                     r.raise_for_status()
                     with open(file_path, "wb") as f:
                         for chunk in r.iter_content(chunk_size=8192):
                             f.write(chunk)
-                    print(f" {filename} téléchargé.")
+                    print(f"  {filename} telecharge.")
                 except Exception as e:
-                    print(f" Erreur lors du téléchargement de {filename} : {e}")
+                    print(f"  ERREUR telechargement {filename} : {e}")
+                    sys.exit(1)
             else:
-                print(f" {filename} déjà présent localement.")
+                print(f"  {filename} deja present.")
 
     def predict(self, input_text: str) -> Dict:
-        
-        
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": input_text}
+            {"role": "user",   "content": input_text},
         ]
-        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        
+        # Template natif du modele (gere add_generation_prompt correctement)
+        prompt = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        
+
+        im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
+        stop_ids  = [self.tokenizer.eos_token_id, im_end_id]
+
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=256,
                 do_sample=False,
                 pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=stop_ids,
             )
 
-        full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        response = full_output[len(prompt):].strip()
+        # Tokens generes uniquement (sans le prompt d entree)
+        input_len = inputs["input_ids"].shape[1]
+        generated = outputs[0][input_len:]
+        response  = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
-        try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > 0:
-                data = json.loads(response[start:end])
-                if data.get("type") == "final":
-                    u = str(data.get("urgence")).capitalize()
-                    data["urgence"] = u if u in ["Haute", "Moyenne", "Faible"] else "Inconnue"
-                return data
-            else:
-                print(f" No JSON found in response: {response[:100]}...")
-                return {"type": "error", "message": "No JSON found"}
-        except Exception as e:
-            print(f"Error parsing JSON: {e} | Response was: {response[:100]}...")
-            return {"type": "error", "message": str(e)}
+        data = _extract_json(response)
+        if data:
+            if data.get("type") == "final":
+                u = str(data.get("urgence", "")).capitalize()
+                data["urgence"] = u if u in ["Haute", "Moyenne", "Faible"] else "Inconnue"
+            return data
 
-MODEL_CALLER = None
+        print(f"  Pas de JSON valide : {response[:100]}...")
+        return {"type": "error", "message": "No JSON found"}
 
-def get_model_caller():
-    global MODEL_CALLER
-    if MODEL_CALLER is None:
-        default_adapter = "models/lora_triage"
-        adapter = os.getenv("ADAPTER_PATH", default_adapter)
-        MODEL_CALLER = LocalModelCaller(adapter_path=adapter)
-    return MODEL_CALLER
-
-# =========================
-# CALL DISPATCHER
-# =========================
-
-def call_model(prompt: str) -> Dict:
-    caller = get_model_caller()
-    return caller.predict(prompt)
 
 # =========================
 # HELPERS
 # =========================
 
-def get_label(prediction: Dict) -> str:
-    if prediction.get("type") == "question":
-        return "question"
-    
-    urgence = prediction.get("urgence", "Inconnue")
-    if urgence in ["Haute", "Moyenne", "Faible"]:
-        return urgence
-    
-    return "Autre"
+def _extract_json(raw: str) -> Optional[Dict]:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        raw = raw.strip()
+    brace = raw.find("{")
+    if brace == -1:
+        return None
+    for end in range(len(raw), brace, -1):
+        try:
+            return json.loads(raw[brace:end])
+        except Exception:
+            continue
+    return None
 
-def print_confusion_matrix(matrix: Dict[str, Dict[str, int]], labels: List[str]):
-    print("\n===== CONFUSION MATRIX =====")
-    header = "TRUE \\ PRED".ljust(12) + "".join([l.ljust(10) for l in labels])
-    print(header)
-    for true_label in labels:
+
+def get_label(pred: Dict) -> str:
+    if pred.get("type") == "question":
+        return "question"
+    u = pred.get("urgence", "Inconnue")
+    return u if u in ["Haute", "Moyenne", "Faible"] else "Autre"
+
+
+def compute_class_metrics(
+    confusion: Dict[str, Dict[str, int]], label: str
+) -> Dict[str, float]:
+    tp = confusion.get(label, {}).get(label, 0)
+    fp = sum(confusion.get(l, {}).get(label, 0) for l in LABELS if l != label)
+    fn = sum(confusion.get(label, {}).get(l, 0) for l in LABELS if l != label)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    return {"precision": precision, "recall": recall, "f1": f1}
+
+
+def print_confusion_matrix(matrix: Dict[str, Dict[str, int]]):
+    print("\n===== MATRICE DE CONFUSION =====")
+    print("REEL \\ PRED".ljust(12) + "".join(l.ljust(10) for l in LABELS))
+    for true_label in LABELS:
         row = true_label.ljust(12)
-        for pred_label in labels:
-            count = matrix.get(true_label, {}).get(pred_label, 0)
-            row += str(count).ljust(10)
+        for pred_label in LABELS:
+            row += str(matrix.get(true_label, {}).get(pred_label, 0)).ljust(10)
         print(row)
 
+
 # =========================
-# EVALUATION
+# EVALUATION PRINCIPALE
 # =========================
 
 def evaluate():
-    labels = ["Haute", "Moyenne", "Faible", "question"]
-    confusion_matrix = {l: {l2: 0 for l2 in labels} for l in labels}
-    
-    total = len(DATASET)
-    correct = 0
-    haute_total = 0
+    adapter_path = os.getenv("ADAPTER_PATH", "models/lora_triage")
+    caller = LocalModelCaller(adapter_path=adapter_path)
+
+    confusion     = {l: {l2: 0 for l2 in LABELS} for l in LABELS}
+    total         = len(EVAL_DATASET)
+    correct       = 0
+    haute_total   = 0
     haute_correct = 0
     missing_fields = 0
 
-    print(f"Starting evaluation on {total} samples")
+    print(f"\nEvaluation sur {total} exemples (limite={CI_SAMPLE_LIMIT})")
+    print("=" * 60)
 
-    for i, sample in enumerate(DATASET):
-        print(f"[{i+1}/{total}] Processing: {sample['input'][:50]}...")
-        pred = call_model(sample["input"])
-        
-        if sample["expected_type"] == "question":
-            actual_label = "question"
-            if not pred.get("question") and pred.get("type") == "question":
-                print(f" Champ 'question' manquant")
-                missing_fields += 1
-        else:
-            actual_label = sample.get("expected_urgence", "Inconnue")
-            if not pred.get("analyse") and pred.get("type") == "final":
-                print(f" Champ 'analyse' manquant")
-                missing_fields += 1
-            
+    for i, sample in enumerate(EVAL_DATASET):
+        print(f"[{i+1}/{total}] {sample['input'][:60]}...")
+        pred = caller.predict(sample["input"])
+
+        actual = (
+            "question" if sample["expected_type"] == "question"
+            else sample.get("expected_urgence", "Inconnue")
+        )
+
+        # Champs obligatoires
+        if pred.get("type") == "question" and not pred.get("question"):
+            print("  Champ 'question' manquant")
+            missing_fields += 1
+        elif pred.get("type") == "final" and not pred.get("analyse"):
+            print("  Champ 'analyse' manquant")
+            missing_fields += 1
+
         pred_label = get_label(pred)
-        
-        if actual_label in labels and pred_label in labels:
-            confusion_matrix[actual_label][pred_label] += 1
 
-        if pred_label == actual_label:
+        if actual in LABELS and pred_label in LABELS:
+            confusion[actual][pred_label] += 1
+
+        ok = pred_label == actual
+        if ok:
             correct += 1
+        print(f"  {'OK  ' if ok else 'FAIL'} attendu={actual:<8} predit={pred_label}")
 
-        if actual_label == "Haute":
+        if actual == "Haute":
             haute_total += 1
             if pred_label == "Haute":
                 haute_correct += 1
 
-    accuracy = correct / total
-    recall_haute = haute_correct / haute_total if haute_total > 0 else 1
+    # ===== METRIQUES =====
+    accuracy     = correct / total
+    recall_haute = haute_correct / haute_total if haute_total > 0 else 1.0
 
-    print("\n===== METRICS =====")
-    print(f"Accuracy: {accuracy:.2f}")
-    print(f"Recall Haute: {recall_haute:.2f}")
-    print(f"Champs manquants: {missing_fields}")
-    
-    print_confusion_matrix(confusion_matrix, labels)
+    print_confusion_matrix(confusion)
 
+    print("\n===== METRIQUES PAR CLASSE =====")
+    print(f"{'Classe':<12} {'Precision':>10} {'Rappel':>10} {'F1':>10}")
+    print("-" * 45)
+    for label in LABELS:
+        m = compute_class_metrics(confusion, label)
+        print(f"{label:<12} {m['precision']:>10.2f} {m['recall']:>10.2f} {m['f1']:>10.2f}")
+
+    print("\n===== RESUME =====")
+    print(f"Accuracy globale : {accuracy:.2f}   (seuil {THRESHOLDS['accuracy']:.2f})")
+    print(f"Rappel Haute     : {recall_haute:.2f}   (seuil {THRESHOLDS['recall_haute']:.2f})")
+    print(f"Champs manquants : {missing_fields}")
+
+    # ===== DECISION CI/CD =====
     failed = False
+
     if recall_haute < THRESHOLDS["recall_haute"]:
-        print(f" FAIL: recall haute trop bas ({recall_haute:.2f} < {THRESHOLDS['recall_haute']:.2f})")
-        failed = True
-    if accuracy < THRESHOLDS["accuracy"]:
-        print(f" FAIL: accuracy trop basse ({accuracy:.2f} < {THRESHOLDS['accuracy']:.2f})")
-        failed = True
-    if missing_fields > 0:
-        print(f" FAIL: {missing_fields} champs obligatoires manquants")
+        print(f"\nBLOCAGE : rappel Haute {recall_haute:.2f} < {THRESHOLDS['recall_haute']:.2f}")
         failed = True
 
-    sys.exit(1 if failed else 0)
+    if accuracy < THRESHOLDS["accuracy"]:
+        print(f"\nBLOCAGE : accuracy {accuracy:.2f} < {THRESHOLDS['accuracy']:.2f}")
+        failed = True
+
+    if missing_fields > 0:
+        print(f"\nBLOCAGE : {missing_fields} champ(s) obligatoire(s) manquant(s)")
+        failed = True
+
+    if failed:
+        print("\nEVALUATION : ECHEC — deploiement bloque.")
+        sys.exit(1)
+    else:
+        print("\nEVALUATION : OK — deploiement autorise.")
+        sys.exit(0)
+
 
 if __name__ == "__main__":
-    #evaluate()
-    print("passs eval")
-    sys.exit(0)
+    evaluate()
