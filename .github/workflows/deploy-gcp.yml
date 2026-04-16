@@ -24,9 +24,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run evaluation
-        env:
-          TEST_MODE: "DIRECT"
-          ADAPTER_PATH: "models/lora_triage"
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install transformers peft accelerate safetensors requests
