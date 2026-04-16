@@ -1,12 +1,27 @@
 
 from pydantic import BaseModel, Field
 from typing import List
+from datetime import datetime
+
+class LogResponse(BaseModel):
+    id: int
+    question: str
+    answer: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 class TriageRequest(BaseModel):
     symptomes: str
 
+from typing import Optional, Any
+
 class TriageResponse(BaseModel):
-    triage: str
+    status: str
+    data: Optional[Any] = None
+    question: Optional[str] = None
+    latency: Optional[float] = None
 
 
 
