@@ -1,17 +1,27 @@
 version: '3.8'
 
 services:
+
+  # ----------------------------------------------------------
+  # Base de données PostgreSQL
+  # ----------------------------------------------------------
   db:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # ----------------------------------------------------------
+  # Serveur vLLM (Qwen3-1.7B-Base + LoRA DPO depuis GCS)
+  # ----------------------------------------------------------
   vllm:
     image: vllm/vllm-openai:latest
     deploy:
@@ -20,31 +30,155 @@ services:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [gpu]
-    ports:
-      - "8000:8000"
+              capabilities: [ gpu ]
     volumes:
       - hf_cache:/root/.cache/huggingface
-      - ${MODEL_PATH}:/app/model_lora
-    command: >
-      --model ${MODEL_ID}
-      --dtype ${VLLM_DTYPE}
-      --enable-lora
-      --lora-modules medical_lora=/app/model_lora
-      --max-model-len 2048
-      --gpu-memory-utilization 0.7
+      - lora_cache:/app/model_lora
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - GCS_LORA_BASE_URL=${GCS_LORA_BASE_URL:-https://storage.googleapis.com/lora-matrice}
+      - MODEL_ID=Qwen/Qwen3-1.7B-Base
+      - VLLM_DTYPE=float16
+    entrypoint: >
+      sh -c "
+        echo '[vLLM] Verification du LoRA...' &&
+        if [ ! -f /app/model_lora/adapter_config.json ]; then
+          echo '[vLLM] Telechargement depuis GCS : $$GCS_LORA_BASE_URL' &&
+          mkdir -p /app/model_lora &&
+          curl -fsSL -o /app/model_lora/adapter_config.json
+            $$GCS_LORA_BASE_URL/adapter_config.json &&
+          curl -fsSL -o /app/model_lora/adapter_model.safetensors
+            $$GCS_LORA_BASE_URL/adapter_model.safetensors &&
+          echo '[vLLM] LoRA telecharge.'
+        else
+          echo '[vLLM] LoRA deja present, skip download.'
+        fi &&
+        python -m vllm.entrypoints.openai.api_server
+          --model $$MODEL_ID
+          --dtype $$VLLM_DTYPE
+          --enable-lora
+          --lora-modules medical_lora=/app/model_lora
+          --max-model-len 1024
+          --max-lora-rank 16
+          --gpu-memory-utilization 0.85
+          --port 8000
+      "
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
 
+  # ----------------------------------------------------------
+  # API FastAPI
+  # ----------------------------------------------------------
   api:
     build: ./api
-    ports:
-      - "8080:8080"
     environment:
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
       - VLLM_API_URL=http://vllm:8000/v1
     depends_on:
-      - db
-      - vllm
+      db:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+      fluentd:
+        condition: service_started
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: "localhost:24224"
+        fluentd-async: "true"
+        tag: "medical.api"
+
+  # ----------------------------------------------------------
+  # Interface Streamlit
+  # ----------------------------------------------------------
+  interface:
+    build:
+      context: .
+      dockerfile: interface/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8080
+    depends_on:
+      - api
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: "localhost:24224"
+        fluentd-async: "true"
+        tag: "medical.interface"
+
+  # ----------------------------------------------------------
+  # Prometheus — collecte des métriques
+  # ----------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+
+  # ----------------------------------------------------------
+  # Fluentd — collecte et routage des logs
+  # ----------------------------------------------------------
+  fluentd:
+    build: ./fluentd
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    volumes:
+      - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # ----------------------------------------------------------
+  # Elasticsearch — stockage et indexation des logs
+  # ----------------------------------------------------------
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ----------------------------------------------------------
+  # Grafana — visualisation des logs et métriques
+  # ----------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
 
 volumes:
   pgdata:
   hf_cache:
+  lora_cache:
+  esdata:
+  grafana_data:
+  prometheus_data:
