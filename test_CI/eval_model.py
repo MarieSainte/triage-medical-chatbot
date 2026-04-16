@@ -5,17 +5,23 @@ import time
 from typing import List, Dict
 import os
 from pathlib import Path
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
 
 # Import du dataset
 try:
     from eval_dataset import DATASET
+    print("Dataset chargé.")
 except ImportError:
     from test_CI.eval_dataset import DATASET
+    print("Dataset chargé depuis test_CI.")
 
 # Import du prompt optimisé DSPy
 try:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
     from api.dspy.signatures import OPTIMIZED_SYSTEM_PROMPT
+    print("Prompt optimisé chargé.")
 except Exception:
     OPTIMIZED_SYSTEM_PROMPT = None
 
@@ -41,10 +47,6 @@ class LocalModelCaller:
             self.ensure_adapter(adapter_path)
 
         print(f"Loading model {model_id} on CPU...")
-        import torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        from peft import PeftModel
-
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
