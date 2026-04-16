@@ -187,7 +187,7 @@ MODEL_ID=Qwen/Qwen3-1.7B-Base
 VLLM_DTYPE=float16
 HF_TOKEN=hf_xxx
 
-GCS_LORA_BASE_URL=https://storage.googleapis.com/lora-matrice
+GCS_LORA_BASE_URL=https://storage.googleapis.com/lora-matrice/checkpoint-60
 
 MISTRAL_API_KEY=xxx   # uniquement pour les scripts de preparation des donnees
 ```

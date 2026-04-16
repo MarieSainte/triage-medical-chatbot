@@ -1,0 +1,214 @@
+=========================================================
+  MEDICAL CHATBOT — EXEMPLES DE DÉMONSTRATION (POC)
+  Modèle : Qwen3-1.7B-Base + LoRA SFT + DPO
+  Format de sortie : JSON structuré (type / urgence / analyse / question)
+=========================================================
+
+Les exemples ci-dessous illustrent les trois cas gérés par le modèle :
+  - URGENCE HAUTE   : appel immédiat du 15 / SAMU
+  - URGENCE MOYENNE : consultation rapide (< 24h)
+  - URGENCE FAIBLE  : peut attendre, soins à domicile
+  - QUESTION        : informations insuffisantes, le modèle demande des précisions
+
+
+---------------------------------------------------------
+  CAS 1 — URGENCE HAUTE (douleur thoracique)
+---------------------------------------------------------
+Entrée :
+  "J'ai une douleur violente dans la poitrine depuis 20 minutes,
+   je transpire beaucoup et j'ai du mal à respirer."
+
+Sortie attendue :
+  {
+    "type": "final",
+    "urgence": "Haute",
+    "analyse": "Tableau clinique évocateur d'un syndrome coronaire aigu
+                (infarctus du myocarde). Appeler le 15 immédiatement.
+                Ne pas laisser le patient seul. Aspirine 250 mg si disponible
+                et pas d'allergie connue.",
+    "question": null
+  }
+
+
+---------------------------------------------------------
+  CAS 2 — URGENCE HAUTE (suspicion AVC)
+---------------------------------------------------------
+Entrée :
+  "Mon mari de 62 ans a soudainement perdu la parole,
+   sa bouche est déviée et il ne peut plus lever le bras droit."
+
+Sortie attendue :
+  {
+    "type": "final",
+    "urgence": "Haute",
+    "analyse": "Signes neurologiques focaux d'apparition brutale très
+                évocateurs d'un AVC ischémique. Appeler le 15 immédiatement.
+                Noter l'heure exacte de début des symptômes.
+                Ne pas donner à manger ni à boire.",
+    "question": null
+  }
+
+
+---------------------------------------------------------
+  CAS 3 — URGENCE HAUTE (réaction allergique grave)
+---------------------------------------------------------
+Entrée :
+  "J'ai mangé des cacahuètes il y a 10 minutes.
+   Mon visage gonfle, ma gorge se resserre et j'ai des plaques rouges partout."
+
+Sortie attendue :
+  {
+    "type": "final",
+    "urgence": "Haute",
+    "analyse": "Choc anaphylactique probable. Appeler le 15 immédiatement.
+                Si le patient a un auto-injecteur d'adrénaline (EpiPen),
+                l'utiliser sans attendre. Allonger le patient, jambes surélevées.",
+    "question": null
+  }
+
+
+---------------------------------------------------------
+  CAS 4 — URGENCE MOYENNE (fracture suspectée)
+---------------------------------------------------------
+Entrée :
+  "Je suis tombé de vélo, mon poignet est très gonflé,
+   j'ai très mal et je ne peux plus le bouger."
+
+Sortie attendue :
+  {
+    "type": "final",
+    "urgence": "Moyenne",
+    "analyse": "Suspicion de fracture du poignet (radius distal).
+                Immobiliser le membre avec une attelle de fortune.
+                Appliquer de la glace (protégée). Consulter aux urgences
+                ou en radiologie dans les 4-6 heures.",
+    "question": null
+  }
+
+
+---------------------------------------------------------
+  CAS 5 — URGENCE MOYENNE (infection urinaire haute)
+---------------------------------------------------------
+Entrée :
+  "J'ai de la fièvre à 39°C depuis deux jours, des frissons,
+   mal dans le dos côté droit et des brûlures en urinant."
+
+Sortie attendue :
+  {
+    "type": "final",
+    "urgence": "Moyenne",
+    "analyse": "Tableau compatible avec une pyélonéphrite aiguë.
+                Consultation médicale dans la journée pour bilan urinaire
+                et traitement antibiotique adapté. Hydratation abondante.",
+    "question": null
+  }
+
+
+---------------------------------------------------------
+  CAS 6 — URGENCE FAIBLE (rhume / infection virale bénigne)
+---------------------------------------------------------
+Entrée :
+  "J'ai le nez qui coule, un peu mal à la gorge et je suis fatigué
+   depuis hier. Pas de fièvre."
+
+Sortie attendue :
+  {
+    "type": "final",
+    "urgence": "Faible",
+    "analyse": "Infection virale des voies respiratoires supérieures (rhume commun).
+                Traitement symptomatique : repos, hydratation, lavage nasal.
+                Consulter si fièvre > 38.5°C ou aggravation après 5 jours.",
+    "question": null
+  }
+
+
+---------------------------------------------------------
+  CAS 7 — URGENCE FAIBLE (entorse bénigne)
+---------------------------------------------------------
+Entrée :
+  "Je me suis tordu la cheville en descendant un escalier,
+   ça fait un peu mal mais je peux encore marcher."
+
+Sortie attendue :
+  {
+    "type": "final",
+    "urgence": "Faible",
+    "analyse": "Entorse de cheville de grade 1 probable (marche conservée).
+                Protocole RICE : repos, glace 20 min toutes les 2h,
+                compression, surélévation. Consulter si la douleur persiste
+                ou s'aggrave après 48h.",
+    "question": null
+  }
+
+
+---------------------------------------------------------
+  CAS 8 — QUESTION (informations insuffisantes)
+---------------------------------------------------------
+Entrée :
+  "J'ai mal au ventre depuis ce matin."
+
+Sortie attendue :
+  {
+    "type": "question",
+    "urgence": null,
+    "analyse": null,
+    "question": "La douleur est-elle localisée d'un côté précis ?
+                 Avez-vous de la fièvre, des nausées ou des vomissements ?"
+  }
+
+
+---------------------------------------------------------
+  CAS 9 — QUESTION (symptômes ambigus)
+---------------------------------------------------------
+Entrée :
+  "Je me sens très fatigué depuis quelques jours."
+
+Sortie attendue :
+  {
+    "type": "question",
+    "urgence": null,
+    "analyse": null,
+    "question": "Avez-vous de la fièvre, une perte de poids récente
+                 ou un essoufflement au repos ou à l'effort ?"
+  }
+
+
+---------------------------------------------------------
+  CAS 10 — CONVERSATION MULTI-TOURS
+---------------------------------------------------------
+Tour 1 — Entrée :
+  "J'ai des maux de tête."
+
+Tour 1 — Sortie (informations insuffisantes) :
+  {
+    "type": "question",
+    "urgence": null,
+    "analyse": null,
+    "question": "Ces maux de tête sont-ils apparus brutalement ou progressivement ?
+                 Avez-vous de la fièvre, une raideur dans la nuque
+                 ou des troubles de la vision ?"
+  }
+
+Tour 2 — Entrée (patient répond) :
+  "C'est apparu très brutalement, comme un coup de tonnerre.
+   Je n'ai jamais eu un mal de tête aussi fort."
+
+Tour 2 — Sortie :
+  {
+    "type": "final",
+    "urgence": "Haute",
+    "analyse": "Céphalée en coup de tonnerre d'apparition brutale :
+                suspicion d'hémorragie méningée. Appeler le 15 immédiatement.
+                Ne pas laisser le patient seul.",
+    "question": null
+  }
+
+
+=========================================================
+  NOTES TECHNIQUES
+=========================================================
+  - Endpoint API  : POST /triage/ask  { "symptomes": "..." }
+  - Réponse status: "ANALYSE" (urgence + analyse) | "ASSISTANT" (question)
+  - Modèle servi  : vLLM + LoRA adapter (SFT → DPO)
+  - Prompt optimisé via DSPy BootstrapFewShot (4 demos, val_accuracy 100%)
+=========================================================
