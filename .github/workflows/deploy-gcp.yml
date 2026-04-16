@@ -3,7 +3,7 @@ name: GCP Docker Push
 on:
   push:
     branches:
-      - prod
+      - main
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -28,11 +28,8 @@ jobs:
           TEST_MODE: "DIRECT"
           ADAPTER_PATH: "models/lora_triage"
         run: |
-          # Installation des dépendances ML (Version CPU pour le runner)
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install transformers peft accelerate safetensors requests
-          
-          # Lancer l'évaluation directe du modèle
           python test_CI/eval_model.py
 
       - name: Authenticate to Google Cloud
