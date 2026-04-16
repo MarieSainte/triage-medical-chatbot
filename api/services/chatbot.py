@@ -1,15 +1,34 @@
 import os
 import logging
+import time
+import json
 from sqlalchemy.orm import Session
 from openai import APIConnectionError, APITimeoutError
+from prometheus_client import Counter, Histogram
 from database import models
 import dspy
-from dspy_custom.signatures import TriageModule
+import importlib.util
 
-# Configuration du logger pour voir les erreurs dans les logs Docker/GCP
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("medical-chatbot-api.triage")
 
-VLLM_API_URL = os.getenv("VLLM_API_URL")
+TRIAGE_COUNTER = Counter(
+    "triage_requests_total",
+    "Nombre total de triages",
+    ["status", "urgence"],
+)
+TRIAGE_LATENCY = Histogram(
+    "triage_latency_seconds",
+    "Latence des appels au modele IA",
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0],
+)
+
+spec = importlib.util.spec_from_file_location("local_signatures", os.path.join(os.path.dirname(__file__), "..", "dspy", "signatures.py"))
+local_signatures = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(local_signatures)
+TriageModule = local_signatures.TriageModule
+
+
+VLLM_API_URL = os.getenv("VLLM_API_URL", "http://localhost:8000/v1")
 
 vllm_endpoint = dspy.LM(
     model="openai/medical_lora",
@@ -20,38 +39,49 @@ dspy.settings.configure(lm=vllm_endpoint)
 
 triage_app = TriageModule()
 
-json_path = os.path.join(os.path.dirname(__file__), "..", "dspy_custom", "optimized_triage.json")
-if os.path.exists(json_path):
-    triage_app.load(json_path)
-    logger.info("Cerveau DSPy chargé avec succès depuis le JSON.")
-else:
-    logger.warning("Fichier optimized_triage.json introuvable, utilisation du mode par défaut.")
-
-def generate_triage(symptomes: str) -> str:
+def generate_triage(symptomes: str) -> dict:
     """
-    Appelle le modèle d'IA avec gestion d'erreurs robuste.
+    Appelle le modèle d'IA avec gestion d'erreurs robuste et mesure de la latence.
     """
+    start_time = time.time()
     try:
         prediction = triage_app(symptomes=symptomes)
+        latency = round(time.time() - start_time, 2)
+        prediction["latency"] = latency
 
-        reponse_formatee = (
-            f"### {prediction.niveau_urgence}\n"
-            f"**Pourquoi** : {prediction.justification}\n"
-            f"**Action** : {prediction.action}"
+        urgence = (prediction.get("data") or {}).get("urgence") if prediction.get("status") == "ANALYSE" else "none"
+        TRIAGE_COUNTER.labels(status=prediction.get("status", "UNKNOWN"), urgence=urgence or "none").inc()
+        TRIAGE_LATENCY.observe(latency)
+        logger.info(
+            "triage_completed",
+            extra={
+                "event": "triage_completed",
+                "status": prediction.get("status"),
+                "urgence": urgence,
+            },
         )
-        return reponse_formatee
+        return prediction
 
     except APITimeoutError:
-        logger.error("Timeout: vLLM a mis trop de temps à répondre.")
-        return "Désolé, le service de diagnostic est surchargé. Veuillez réessayer dans un instant."
-    
+        latency = round(time.time() - start_time, 2)
+        TRIAGE_COUNTER.labels(status="ERROR", urgence="none").inc()
+        TRIAGE_LATENCY.observe(latency)
+        logger.error("triage_timeout", extra={"event": "triage_error", "error_type": "timeout"})
+        return {"status": "ERROR", "message": "Service surchargé.", "latency": latency}
+
     except APIConnectionError:
-        logger.error("Connexion impossible au serveur vLLM. Est-il lancé ?")
-        return "Désolé, un problème technique empêche la réponse immédiate. Nos équipes sont prévenues."
-    
+        latency = round(time.time() - start_time, 2)
+        TRIAGE_COUNTER.labels(status="ERROR", urgence="none").inc()
+        TRIAGE_LATENCY.observe(latency)
+        logger.error("triage_connection_error", extra={"event": "triage_error", "error_type": "connection"})
+        return {"status": "ERROR", "message": "Connexion impossible à l'IA.", "latency": latency}
+
     except Exception as e:
-        logger.error(f"Erreur inconnue vLLM: {str(e)}")
-        return "Désolé, une erreur technique est survenue lors de l'analyse de vos symptômes."
+        latency = round(time.time() - start_time, 2)
+        TRIAGE_COUNTER.labels(status="ERROR", urgence="none").inc()
+        TRIAGE_LATENCY.observe(latency)
+        logger.error("triage_unknown_error", extra={"event": "triage_error", "error_type": "unknown", "detail": str(e)})
+        return {"status": "ERROR", "message": "Erreur technique.", "latency": latency}
 
 def log_triage(db: Session, question: str, answer: str):
     """
@@ -65,3 +95,13 @@ def log_triage(db: Session, question: str, answer: str):
     except Exception as e:
         logger.error(f"Erreur lors de l'écriture en BDD: {str(e)}")
         db.rollback()
+
+def get_logs(db: Session):
+    """
+    Récupère l'historique complet des échanges.
+    """
+    try:
+        return db.query(models.History).order_by(models.History.created_at.desc()).all()
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération de l'historique: {str(e)}")
+        return []
