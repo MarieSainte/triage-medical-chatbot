@@ -40,27 +40,16 @@ services:
           echo '[vLLM] Telechargement depuis GCS : $GCS_LORA_BASE_URL' &&
           mkdir -p /app/model_lora &&
 
-          curl -fsSL \"$GCS_LORA_BASE_URL/adapter_config.json\" \
-            -o /app/model_lora/adapter_config.json &&
+          curl -fsSL \"$GCS_LORA_BASE_URL/adapter_config.json\" -o /app/model_lora/adapter_config.json &&
 
-          curl -fsSL \"$GCS_LORA_BASE_URL/adapter_model.safetensors\" \
-            -o /app/model_lora/adapter_model.safetensors &&
+          curl -fsSL \"$GCS_LORA_BASE_URL/adapter_model.safetensors\" -o /app/model_lora/adapter_model.safetensors &&
 
           echo '[vLLM] LoRA telecharge.'
         else
           echo '[vLLM] LoRA deja present, skip download.'
         fi &&
 
-        python -m vllm.entrypoints.openai.api_server \
-          --model $MODEL_ID \
-          --dtype $VLLM_DTYPE \
-          --device cpu \
-          --enable-lora \
-          --lora-modules medical_lora=/app/model_lora \
-          --max-model-len 2048 \
-          --max-lora-rank 16 \
-          --enforce-eager \
-          --port 8000
+        python -m vllm.entrypoints.openai.api_server --model $MODEL_ID --dtype $VLLM_DTYPE --device cpu --enable-lora --lora-modules medical_lora=/app/model_lora --max-model-len 2048 --max-lora-rank 16 --enforce-eager --port 8000
       "
     healthcheck:
       test: [ "CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1" ]
