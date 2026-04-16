@@ -24,13 +24,6 @@ services:
   # ----------------------------------------------------------
   vllm:
     image: vllm/vllm-openai:latest
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
     volumes:
       - hf_cache:/root/.cache/huggingface
       - lora_cache:/app/model_lora
@@ -38,7 +31,7 @@ services:
       - HF_TOKEN=${HF_TOKEN}
       - GCS_LORA_BASE_URL=${GCS_LORA_BASE_URL:-https://storage.googleapis.com/lora-matrice/checkpoint-60}
       - MODEL_ID=Qwen/Qwen3-1.7B-Base
-      - VLLM_DTYPE=float16
+      - VLLM_DTYPE=bfloat16
     entrypoint: >
       sh -c "
         echo '[vLLM] Verification du LoRA...' &&
@@ -56,11 +49,12 @@ services:
         python -m vllm.entrypoints.openai.api_server
           --model $$MODEL_ID
           --dtype $$VLLM_DTYPE
+          --device cpu
           --enable-lora
           --lora-modules medical_lora=/app/model_lora
           --max-model-len 2048
           --max-lora-rank 16
-          --gpu-memory-utilization 0.85
+          --enforce-eager
           --port 8000
       "
     healthcheck:
@@ -68,7 +62,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 120s
+      start_period: 180s
 
   # ----------------------------------------------------------
   # API FastAPI
