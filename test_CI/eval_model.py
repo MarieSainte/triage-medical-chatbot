@@ -30,10 +30,7 @@ except Exception:
 # CONFIG
 # =========================
 
-TEST_MODE = os.getenv("TEST_MODE", "API") 
-API_URL = "http://localhost:8000/triage/ask"  
-HEALTH_URL = "http://localhost:8000/health"
-GCS_LORA_BASE_URL = os.getenv("GCS_LORA_BASE_URL", "https://storage.googleapis.com/lora-matrice")
+GCS_LORA_BASE_URL = os.getenv("GCS_LORA_BASE_URL", "https://storage.googleapis.com/lora-matrice/checkpoint-60/")
 
 # seuils CI/CD
 THRESHOLDS = {
@@ -64,6 +61,13 @@ class LocalModelCaller:
             self.model = PeftModel.from_pretrained(self.model, adapter_path)
         
         self.model.eval()
+        
+        # Configuration du template ChatML (identique à l'entraînement)
+        self.tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n'}}"
+            "{% endfor %}"
+        )
         
         if OPTIMIZED_SYSTEM_PROMPT:
             print(" Using optimized DSPy system prompt.")
@@ -122,7 +126,12 @@ ou
 
     def predict(self, input_text: str) -> Dict:
         import torch
-        prompt = f"{self.system_prompt}\n\n### USER\n{input_text}\n"
+        
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": input_text}
+        ]
+        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         
@@ -168,16 +177,8 @@ def get_model_caller():
 # =========================
 
 def call_model(prompt: str) -> Dict:
-    if TEST_MODE == "DIRECT":
-        caller = get_model_caller()
-        return caller.predict(prompt)
-    else:
-        response = requests.post(API_URL, json={"symptomes": prompt}, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        if "data" in data and data["data"]:
-            return data["data"]
-        return data
+    caller = get_model_caller()
+    return caller.predict(prompt)
 
 # =========================
 # HELPERS
@@ -218,7 +219,7 @@ def evaluate():
     haute_correct = 0
     missing_fields = 0
 
-    print(f"Starting evaluation on {total} samples (Mode: {TEST_MODE})...")
+    print(f"Starting evaluation on {total} samples")
 
     for i, sample in enumerate(DATASET):
         print(f"[{i+1}/{total}] Processing: {sample['input'][:50]}...")
@@ -271,26 +272,5 @@ def evaluate():
 
     sys.exit(1 if failed else 0)
 
-def wait_for_server(url: str, timeout: int = 30):
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                print("✅ Serveur prêt")
-                return True
-        except requests.ConnectionError:
-            pass
-        print("... attente du serveur")
-        time.sleep(2)
-    print(" Timeout serveur")
-    return False
-
 if __name__ == "__main__":
-    if TEST_MODE == "DIRECT":
-        evaluate()
-    else:
-        if wait_for_server(HEALTH_URL):
-            evaluate()
-        else:
-            sys.exit(1)
+    evaluate()
