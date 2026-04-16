@@ -5,3 +5,5 @@ psycopg2-binary
 openai
 python-dotenv
 dspy
+python-json-logger
+prometheus-fastapi-instrumentator
