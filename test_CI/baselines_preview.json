@@ -1,0 +1,322 @@
+[
+  {
+    "input": "J'ai une douleur violente dans la poitrine depuis 20 minutes, je transpire beaucoup et j'ai du mal à respirer.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "Syndrome coronaire aigu suspecté",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "La douleur thoracique persistante avec des symptômes comme la transpiration excessive et la difficulté à respirer suggère une **urgence médicale** (Haute). Il est crucial de consulter immédiatement un **médecin urgentiste** pour évaluer le risque de complications (e.g., infarctus du myocarde, pneumonie, ou autre). Un examen clinique rapide est nécessaire pour déterminer la cause sous-jacente (ex. : pneumothorax, pneumonie, ou syndrome de la poitrine).",
+      "expected_question": null
+    },
+    "flag": null
+  },
+  {
+    "input": "Mon mari de 62 ans a soudainement perdu la parole, sa bouche est déviée et il ne peut plus lever le bras droit.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "Suspicion d'AVC",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous remarqué des signes de convulsion ou de perte de connaissance avant le début de la perte de la parole ?"
+    },
+    "flag": "ALERTE SECURITE : Haute -> question"
+  },
+  {
+    "input": "Je suis tombé de vélo, mon poignet est très gonflé, j'ai très mal et je ne peux plus le bouger.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Moyenne",
+      "expected_analyse": "Suspicion de fracture",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur intense dans le poignet ou une sensation de brûlure lors de la chute ?"
+    },
+    "flag": "CHANGEMENT TYPE : final -> question"
+  },
+  {
+    "input": "J'ai le nez qui coule, un peu mal à la gorge et je suis fatigué depuis hier. Pas de fièvre.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Faible",
+      "expected_analyse": "Infection virale bénigne",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "final",
+      "expected_urgence": "Faible",
+      "expected_analyse": "Les symptômes mentionnés (coule du nez, mal à la gorge, fatigue) ne suggèrent pas une urgence médicale immédiate. Cependant, il est recommandé de consulter un médecin pour un examen complet et un diagnostic précis, en particulier si les symptômes persistent ou s'aggravent.",
+      "expected_question": null
+    },
+    "flag": null
+  },
+  {
+    "input": "J'ai mal au ventre depuis ce matin.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Demander localisation ou symptômes associés"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur abdominale persistante depuis plusieurs heures ou est-elle apparue brusquement ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "Je me sens très fatigué depuis quelques jours.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Demander fièvre ou essoufflement"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une fatigue intense ou une perte d'appétit significative depuis plusieurs jours ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "J'ai des maux de tête.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Demander mode d'apparition ou signes associés"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur thoracique persistante depuis plusieurs heures ou est-elle apparue brusquement ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "Mon enfant a avalé un petit jouet il y a 5 minutes, il tousse mais respire normalement pour l'instant.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "Inhalation de corps étranger, risque d'obstruction",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous remarqué des signes d'asphyxie (pouls faible, cyanose) ou des difficultés respiratoires après l'ingestion du jouet ?"
+    },
+    "flag": "ALERTE SECURITE : Haute -> question"
+  },
+  {
+    "input": "J'ai des plaques rouges qui grattent sur tout le corps depuis ce matin après avoir mangé des crevettes.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Demander s'il y a un gonflement de la gorge ou des difficultés respiratoires"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "Je me suis coupé avec une feuille de papier, ça saigne très peu.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Faible",
+      "expected_analyse": "Plaie superficielle",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?"
+    },
+    "flag": "CHANGEMENT TYPE : final -> question"
+  },
+  {
+    "input": "I have severe crushing chest pain radiating to my left arm, and I feel nauseous.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "Suspected myocardial infarction",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "La douleur thoracique sévère avec radiation à l'épaule gauche et la nausée sont des signes d'un infarctus du myocarde (MI). Il est urgent de consulter un médecin en urgence pour un examen cardiaque et un traitement approprié.",
+      "expected_question": null
+    },
+    "flag": null
+  },
+  {
+    "input": "My grandmother just collapsed, she's not responding and her breathing is very shallow.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "Cardiac arrest or coma",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "final",
+      "expected_urgence": "Haute",
+      "expected_analyse": "La situation est **haute** en termes de urgence. Une personne en état de choc (perte de conscience, respiration très ralentie) nécessite une intervention immédiate pour éviter des complications graves (hypoxie, hypotension, risque de décès). Un appel d'urgence (15 ou 112) est recommandé pour une prise en charge médicale en urgence.",
+      "expected_question": null
+    },
+    "flag": null
+  },
+  {
+    "input": "I twisted my ankle playing basketball. It's swollen but I can still walk on it with a limp.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Moyenne",
+      "expected_analyse": "Suspected ankle sprain",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?"
+    },
+    "flag": "CHANGEMENT TYPE : final -> question"
+  },
+  {
+    "input": "I have a mild cough and runny nose for 2 days. No fever.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Faible",
+      "expected_analyse": "Common cold / viral infection",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "final",
+      "expected_urgence": "Faible",
+      "expected_analyse": "Les symptômes mentionnés (cough et rhinopharyngite) sont généralement associés à une infection virale (comme la grippe ou la bronchite). Le niveau d'urgence est **Faible** car les signes ne suggèrent pas une urgence médicale immédiate (ex. : pneumothorax, infarctus du myocarde). Une surveillance à domicile est recommandée, mais un examen médical complet n'est pas nécessaire pour le moment.",
+      "expected_question": null
+    },
+    "flag": null
+  },
+  {
+    "input": "I have been experiencing abdominal pain.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Ask for location, duration, and associated symptoms"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur abdominale persistante depuis plusieurs heures ou est-elle apparue brusquement ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "I feel dizzy when I stand up.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Ask about fainting, hearing loss, or headaches"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une sensation de vertige ou de malaise après avoir levé le pied, sans autre symptôme ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "My arm hurts.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Ask about trauma, type of pain, or radiation"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "I accidentally spilled boiling water on my hand, the skin is peeling off and it's extremely painful.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Moyenne",
+      "expected_analyse": "Second degree burn",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?"
+    },
+    "flag": "CHANGEMENT TYPE : final -> question"
+  },
+  {
+    "input": "I have a headache since this morning.",
+    "old": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Ask about vision changes, vomiting, or severity"
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur thoracique persistante depuis plusieurs heures ou est-elle apparue brusquement ?"
+    },
+    "flag": null
+  },
+  {
+    "input": "I noticed a small bruise on my leg but I don't remember bumping into anything.",
+    "old": {
+      "expected_type": "final",
+      "expected_urgence": "Faible",
+      "expected_analyse": "Minor unexplained bruising",
+      "expected_question": null
+    },
+    "new": {
+      "expected_type": "question",
+      "expected_urgence": null,
+      "expected_analyse": null,
+      "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?"
+    },
+    "flag": "CHANGEMENT TYPE : final -> question"
+  }
+]

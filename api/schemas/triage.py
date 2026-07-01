@@ -1,7 +1,8 @@
 
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional, Any
 from datetime import datetime
+
 
 class LogResponse(BaseModel):
     id: int
@@ -12,10 +13,21 @@ class LogResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class TriageRequest(BaseModel):
-    symptomes: str
 
-from typing import Optional, Any
+class ChatMLMessage(BaseModel):
+    """Un message au format ChatML (role + content)."""
+    role: str   # "user" | "assistant"
+    content: str
+
+
+class TriageRequest(BaseModel):
+    """
+    Accepte soit un historique complet de messages ChatML,
+    soit un texte brut (rétrocompatibilité).
+    """
+    messages: Optional[List[ChatMLMessage]] = None
+    symptomes: Optional[str] = None
+
 
 class TriageResponse(BaseModel):
     status: str
@@ -25,12 +37,12 @@ class TriageResponse(BaseModel):
     latency: Optional[float] = None
 
 
-
 class TriageAnalyse(BaseModel):
-    priorite: str = Field(desc="Niveau d'urgence : URGENCE, RELATIVE ou FAIBLE")
-    justification: str = Field(desc="Pourquoi ce niveau d'urgence")
-    recommandation: str = Field(desc="Action immédiate à faire")
-    liste_des_symptomes: List[str] = Field(desc="Liste des symptômes identifiés")
+    priorite: str = Field(description="Niveau d'urgence : URGENCE, RELATIVE ou FAIBLE")
+    justification: str = Field(description="Pourquoi ce niveau d'urgence")
+    recommandation: str = Field(description="Action immédiate à faire")
+    liste_des_symptomes: List[str] = Field(description="Liste des symptômes identifiés")
+
 
 class QuestionSuivi(BaseModel):
-    question: str = Field(desc="La question à poser pour obtenir plus d'infos")
+    question: str = Field(description="La question à poser pour obtenir plus d'infos")

@@ -1,0 +1,104 @@
+{
+  "title": "Medical Chatbot — MLOps Dashboard",
+  "uid": "medical-chatbot",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Requêtes / minute",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [{
+        "expr": "rate(triage_requests_total[1m]) * 60",
+        "legendFormat": "req/min"
+      }],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": 0}]}}}
+    },
+    {
+      "id": 2,
+      "title": "Latence P95 (secondes)",
+      "type": "stat",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [{
+        "expr": "histogram_quantile(0.95, rate(triage_latency_seconds_bucket[5m]))",
+        "legendFormat": "P95"
+      }],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 5}, {"color": "red", "value": 15}]}}}
+    },
+    {
+      "id": 3,
+      "title": "Taux d'erreur",
+      "type": "stat",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "targets": [{
+        "expr": "rate(triage_requests_total{status='ERROR'}[5m]) / rate(triage_requests_total[5m])",
+        "legendFormat": "error rate"
+      }],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "red", "value": 0.05}]}}}
+    },
+    {
+      "id": 4,
+      "title": "Total requêtes",
+      "type": "stat",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "sum(triage_requests_total)", "legendFormat": "total"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}}
+    },
+    {
+      "id": 5,
+      "title": "Requêtes par urgence",
+      "type": "piechart",
+      "gridPos": {"x": 0, "y": 4, "w": 8, "h": 8},
+      "targets": [{
+        "expr": "sum by (urgence) (triage_requests_total{status='ANALYSE'})",
+        "legendFormat": "{{urgence}}"
+      }],
+      "options": {"pieType": "donut"},
+      "fieldConfig": {"overrides": [
+        {"matcher": {"id": "byName", "options": "Haute"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+        {"matcher": {"id": "byName", "options": "Moyenne"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]},
+        {"matcher": {"id": "byName", "options": "Faible"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}
+      ]}
+    },
+    {
+      "id": 6,
+      "title": "Latence des appels (P50 / P95 / P99)",
+      "type": "timeseries",
+      "gridPos": {"x": 8, "y": 4, "w": 16, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(triage_latency_seconds_bucket[2m]))", "legendFormat": "P50"},
+        {"expr": "histogram_quantile(0.95, rate(triage_latency_seconds_bucket[2m]))", "legendFormat": "P95"},
+        {"expr": "histogram_quantile(0.99, rate(triage_latency_seconds_bucket[2m]))", "legendFormat": "P99"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "palette-classic"}}}
+    },
+    {
+      "id": 7,
+      "title": "Volume de requêtes (rate)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "targets": [{
+        "expr": "sum by (status) (rate(triage_requests_total[2m]))",
+        "legendFormat": "{{status}}"
+      }],
+      "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "palette-classic"}}}
+    },
+    {
+      "id": 8,
+      "title": "HTTP FastAPI — statuts",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "targets": [{
+        "expr": "sum by (status) (rate(http_requests_total[2m]))",
+        "legendFormat": "HTTP {{status}}"
+      }],
+      "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "palette-classic"}}}
+    }
+  ]
+}

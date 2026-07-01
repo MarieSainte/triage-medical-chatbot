@@ -24,32 +24,33 @@ except ImportError:
     from test_CI.eval_dataset import DATASET
     print("Dataset charge depuis test_CI.")
 
-# Import du prompt optimise DSPy
+# Import du prompt optimise DSPy + demos few-shot
 try:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from api.dspy.signatures import OPTIMIZED_SYSTEM_PROMPT
+    from api.dspy.signatures import OPTIMIZED_SYSTEM_PROMPT, _DEMOS
     print("Prompt optimise charge.")
 except Exception:
     OPTIMIZED_SYSTEM_PROMPT = None
+    _DEMOS = []
 
 # =========================
 # CONFIG
 # =========================
 
-# CI rapide : 5 premiers exemples. Eval complete locale : EVAL_SAMPLE_LIMIT=10
+# CI rapide : 5 premiers exemples. Eval complete locale : EVAL_SAMPLE_LIMIT=20
 CI_SAMPLE_LIMIT = int(os.getenv("EVAL_SAMPLE_LIMIT", "5"))
 EVAL_DATASET    = DATASET[:CI_SAMPLE_LIMIT]
 
 GCS_LORA_BASE_URL = os.getenv(
     "GCS_LORA_BASE_URL", "https://storage.googleapis.com/lora-matrice/checkpoint-60"
 )
-MODEL_ID = os.getenv("MODEL_ID", "Qwen/Qwen3-1.7B-Base")
+MODEL_ID = os.getenv("MODEL_ID", "production_model")
 
 LABELS = ["Haute", "Moyenne", "Faible", "question"]
 
 # Seuils CI/CD
-# recall_haute : critique securite patient — ne pas rater un cas urgent
-# accuracy     : souple car le modele est medicalement conservateur (sur-triage plutot qu'evitement)
+# recall_haute : critique securite patient — ne pas rater un cas urgent (multi-tour inclus)
+# accuracy     : souple car le modele pose souvent une question au premier tour
 THRESHOLDS = {
     "recall_haute": 0.90,
     "accuracy":     0.50,
@@ -71,7 +72,7 @@ class LocalModelCaller:
 
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16,
             device_map="cpu",
             low_cpu_mem_usage=True,
             trust_remote_code=True,
@@ -94,6 +95,7 @@ class LocalModelCaller:
                 '{"type":"final","question":null,"urgence":"Haute|Moyenne|Faible","analyse":"..."} '
                 'ou {"type":"question","question":"...","urgence":null,"analyse":null}'
             )
+        self.demos = _DEMOS
 
     def ensure_adapter(self, adapter_path: str):
         """Telecharge les matrices LoRA depuis GCS si elles sont absentes."""
@@ -118,12 +120,18 @@ class LocalModelCaller:
             else:
                 print(f"  {filename} deja present.")
 
-    def predict(self, input_text: str) -> Dict:
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user",   "content": input_text},
-        ]
-        # Template natif du modele (gere add_generation_prompt correctement)
+    def _build_messages(self, input_text: str) -> List[Dict]:
+        messages = [{"role": "system", "content": self.system_prompt}]
+        for demo in self.demos:
+            s = demo.get("symptomes", "")
+            r = demo.get("reponse", "")
+            if s and r:
+                messages.append({"role": "user",      "content": s})
+                messages.append({"role": "assistant", "content": r})
+        messages.append({"role": "user", "content": input_text})
+        return messages
+
+    def _generate(self, messages: List[Dict]) -> Dict:
         prompt = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
@@ -141,7 +149,6 @@ class LocalModelCaller:
                 eos_token_id=stop_ids,
             )
 
-        # Tokens generes uniquement (sans le prompt d entree)
         input_len = inputs["input_ids"].shape[1]
         generated = outputs[0][input_len:]
         response  = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
@@ -151,10 +158,25 @@ class LocalModelCaller:
             if data.get("type") == "final":
                 u = str(data.get("urgence", "")).capitalize()
                 data["urgence"] = u if u in ["Haute", "Moyenne", "Faible"] else "Inconnue"
+            data["_raw"] = response
             return data
 
         print(f"  Pas de JSON valide : {response[:100]}...")
-        return {"type": "error", "message": "No JSON found"}
+        return {"type": "error", "message": "No JSON found", "_raw": response}
+
+    def predict(self, input_text: str) -> Dict:
+        return self._generate(self._build_messages(input_text))
+
+    def predict_turn2(self, input_text: str, turn1_pred: Dict, followup: str) -> Dict:
+        """Deuxieme tour : fournit le followup patient apres la question du modele."""
+        turn1_raw = turn1_pred.get("_raw") or json.dumps(
+            {k: v for k, v in turn1_pred.items() if k != "_raw"},
+            ensure_ascii=False,
+        )
+        messages = self._build_messages(input_text)
+        messages.append({"role": "assistant", "content": turn1_raw})
+        messages.append({"role": "user",      "content": followup})
+        return self._generate(messages)
 
 
 # =========================
@@ -212,22 +234,35 @@ def print_confusion_matrix(matrix: Dict[str, Dict[str, int]]):
 # =========================
 
 def evaluate():
-    adapter_path = os.getenv("ADAPTER_PATH", "models/lora_triage")
+    adapter_path = os.getenv("ADAPTER_PATH", "NONE")
+    if adapter_path.upper() == "NONE":
+        adapter_path = None
     caller = LocalModelCaller(adapter_path=adapter_path)
 
-    confusion     = {l: {l2: 0 for l2 in LABELS} for l in LABELS}
-    total         = len(EVAL_DATASET)
-    correct       = 0
-    haute_total   = 0
-    haute_correct = 0
+    confusion      = {l: {l2: 0 for l2 in LABELS} for l in LABELS}
+    total          = len(EVAL_DATASET)
+    correct        = 0
+    haute_total    = 0
+    haute_correct  = 0
     missing_fields = 0
+    multiturn_used = 0
 
-    print(f"\nEvaluation sur {total} exemples (limite={CI_SAMPLE_LIMIT})")
+    print(f"\nEvaluation multi-tour sur {total} exemples (limite={CI_SAMPLE_LIMIT})")
     print("=" * 60)
 
     for i, sample in enumerate(EVAL_DATASET):
+        followup = sample.get("followup")
         print(f"[{i+1}/{total}] {sample['input'][:60]}...")
-        pred = caller.predict(sample["input"])
+
+        pred  = caller.predict(sample["input"])
+        turns = 1
+
+        # Tour 2 : si le modele pose une question et qu'un followup est defini
+        if pred.get("type") == "question" and followup:
+            print(f"  -> Tour 1 : question posee — envoi du followup patient")
+            pred   = caller.predict_turn2(sample["input"], pred, followup)
+            turns  = 2
+            multiturn_used += 1
 
         actual = (
             "question" if sample["expected_type"] == "question"
@@ -250,7 +285,7 @@ def evaluate():
         ok = pred_label == actual
         if ok:
             correct += 1
-        print(f"  {'OK  ' if ok else 'FAIL'} attendu={actual:<8} predit={pred_label}")
+        print(f"  {'OK  ' if ok else 'FAIL'} [{turns}T] attendu={actual:<8} predit={pred_label}")
 
         if actual == "Haute":
             haute_total += 1
@@ -274,6 +309,7 @@ def evaluate():
     print(f"Accuracy globale : {accuracy:.2f}   (seuil {THRESHOLDS['accuracy']:.2f})")
     print(f"Rappel Haute     : {recall_haute:.2f}   (seuil {THRESHOLDS['recall_haute']:.2f})")
     print(f"Champs manquants : {missing_fields}")
+    print(f"Tours multiples  : {multiturn_used} exemple(s) evalues en 2 tours")
 
     # ===== DECISION CI/CD =====
     failed = False

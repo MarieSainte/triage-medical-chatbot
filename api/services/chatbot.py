@@ -31,7 +31,7 @@ TriageModule = local_signatures.TriageModule
 VLLM_API_URL = os.getenv("VLLM_API_URL", "http://localhost:8000/v1")
 
 vllm_endpoint = dspy.LM(
-    model="openai/medical_lora",
+    model="openai/medical_chatbot",
     api_base=VLLM_API_URL,
     api_key="EMPTY"
 )
@@ -39,13 +39,15 @@ dspy.settings.configure(lm=vllm_endpoint)
 
 triage_app = TriageModule()
 
-def generate_triage(symptomes: str) -> dict:
+def generate_triage(symptomes: str = None, messages: list = None) -> dict:
     """
-    Appelle le modèle d'IA avec gestion d'erreurs robuste et mesure de la latence.
+    Appelle le modèle d'IA.
+    - messages : liste ChatML [{"role": "user"|"assistant", "content": "..."}]
+    - symptomes : texte brut (rétrocompatibilité)
     """
     start_time = time.time()
     try:
-        prediction = triage_app(symptomes=symptomes)
+        prediction = triage_app(symptomes=symptomes, messages=messages)
         latency = round(time.time() - start_time, 2)
         prediction["latency"] = latency
 

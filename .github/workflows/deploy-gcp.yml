@@ -1,15 +1,9 @@
-name: GCP Docker Push
+name: CI/CD — Deploy to RunPod
 
 on:
   push:
     branches:
       - main
-
-env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  REGION: europe-west1
-  GAR_LOCATION: europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/mon-repo-docker
-  API_IMAGE: medical-chatbot-api
 
 jobs:
   build-and-push:
@@ -17,7 +11,7 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write
+      packages: write
 
     steps:
       - name: Checkout repository
@@ -25,40 +19,48 @@ jobs:
 
       - name: Run evaluation
         env:
-          GCS_LORA_BASE_URL: https://storage.googleapis.com/lora-matrice/checkpoint-60
-          ADAPTER_PATH: models/lora_triage
+          ADAPTER_PATH: "NONE"
           EVAL_SAMPLE_LIMIT: "5"
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install transformers peft accelerate safetensors requests
           python test_CI/eval_model.py
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+      - name: Set image name
+        run: echo "IMAGE_NAME=$(echo '${{ github.repository_owner }}/medical-chatbot-api' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          workload_identity_provider: projects/934256576698/locations/global/workloadIdentityPools/github-pool/providers/github
-          service_account: github-actions-deploy@project-51e18c68-41e7-4d2d-a72.iam.gserviceaccount.com
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_NAME }}:latest
 
-      - name: Verify gcloud auth
+      # Redémarre le pod RunPod pour qu'il pull la nouvelle image :latest.
+      # Si le pod est déjà éteint, continue-on-error évite de bloquer la CI.
+      - name: Restart RunPod Pod
+        continue-on-error: true
         run: |
-          gcloud config set project ${{ env.PROJECT_ID }}
-          gcloud auth list
-          gcloud config get-value project
+          echo "Arret du pod..."
+          curl -s -X POST \
+            "https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"query": "mutation { podStop(input: { podId: \"${{ secrets.RUNPOD_POD_ID }}\" }) { id currentState } }"}'
 
-      - name: Configure Docker
-        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+          echo "Attente arrêt complet..."
+          sleep 15
 
-      - name: Build API Docker Image
-        run: |
-          docker build \
-            -t ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:${{ github.sha }} \
-            -t ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:latest \
-            ./api
-
-      - name: Push API Docker Image
-        run: |
-          docker push ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:${{ github.sha }}
-          docker push ${{ env.GAR_LOCATION }}/${{ env.API_IMAGE }}:latest
+          echo "Redemarrage du pod (pull :latest automatique)..."
+          curl -s -X POST \
+            "https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"query": "mutation { podResume(input: { podId: \"${{ secrets.RUNPOD_POD_ID }}\", gpuCount: 1 }) { id currentState } }"}'
