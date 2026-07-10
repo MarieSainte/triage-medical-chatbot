@@ -15,8 +15,7 @@ Les exemples ci-dessous illustrent les trois cas gérés par le modèle :
   CAS 1 — URGENCE HAUTE (douleur thoracique)
 ---------------------------------------------------------
 Entrée :
-  "J'ai une douleur violente dans la poitrine depuis 20 minutes,
-   je transpire beaucoup et j'ai du mal à respirer."
+  "
 
 Sortie attendue :
   {
@@ -34,8 +33,7 @@ Sortie attendue :
   CAS 2 — URGENCE HAUTE (suspicion AVC)
 ---------------------------------------------------------
 Entrée :
-  "Mon mari de 62 ans a soudainement perdu la parole,
-   sa bouche est déviée et il ne peut plus lever le bras droit."
+  ""
 
 Sortie attendue :
   {
@@ -90,8 +88,7 @@ Sortie attendue :
   CAS 5 — URGENCE MOYENNE (infection urinaire haute)
 ---------------------------------------------------------
 Entrée :
-  "J'ai de la fièvre à 39°C depuis deux jours, des frissons,
-   mal dans le dos côté droit et des brûlures en urinant."
+  ""
 
 Sortie attendue :
   {
