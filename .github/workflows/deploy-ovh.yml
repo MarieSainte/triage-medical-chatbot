@@ -1,0 +1,151 @@
+name: CI/CD — Deploy to OVH (VM neurova)
+
+# Déploiement sur la VM OVH (mutualisée avec neurova).
+# Déclencheurs : push sur main (éval + build + deploy) ou dispatch manuel.
+on:
+  # TODO: trigger push désactivé temporairement (série de push en cours) — réactiver après.
+  # push:
+  #   branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Tag d image à déployer (défaut : SHA du commit)'
+        required: false
+        default: ''
+
+jobs:
+  # Gate qualité : éval du modèle fusionné HF sur CPU (ADAPTER_PATH=NONE, poids déjà fusionnés).
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run evaluation
+        env:
+          MODEL_ID: huggingjojo/medical-chatbot-model
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          ADAPTER_PATH: "NONE"
+          EVAL_SAMPLE_LIMIT: "5"
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers peft accelerate safetensors requests
+          python test_CI/eval_model.py
+
+  # Build des 3 images → ghcr.io (la VM pull, elle ne build pas).
+  build-and-push:
+    needs: evaluate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      owner_lc: ${{ steps.meta.outputs.owner_lc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          # ghcr.io refuse les majuscules dans les chemins d'image
+          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="${GITHUB_SHA::7}"; fi
+          echo "owner_lc=${OWNER_LC}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner_lc }}/medical-chatbot-api:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ steps.meta.outputs.owner_lc }}/medical-chatbot-api:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push Interface image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./interface/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner_lc }}/medical-chatbot-interface:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ steps.meta.outputs.owner_lc }}/medical-chatbot-interface:latest
+          cache-from: type=gha,scope=interface
+          cache-to: type=gha,mode=max,scope=interface
+
+      - name: Build and push Fluentd image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./fluentd
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner_lc }}/medical-chatbot-fluentd:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ steps.meta.outputs.owner_lc }}/medical-chatbot-fluentd:latest
+          cache-from: type=gha,scope=fluentd
+          cache-to: type=gha,mode=max,scope=fluentd
+
+  # Déploiement SSH sur la VM OVH. Le .env vit sur la VM, jamais touché par la CI.
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.OVH_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          cat >> ~/.ssh/config <<EOF
+          Host ovh
+            HostName ${{ secrets.OVH_HOST }}
+            User ${{ secrets.OVH_USER }}
+            IdentityFile ~/.ssh/id_deploy
+            StrictHostKeyChecking accept-new
+          EOF
+
+      - name: Sync compose + configs to OVH
+        env:
+          DEPLOY_PATH: ${{ secrets.OVH_DEPLOY_PATH }}
+        run: |
+          ssh ovh "mkdir -p $DEPLOY_PATH/prometheus $DEPLOY_PATH/fluentd $DEPLOY_PATH/grafana"
+          scp ./docker-compose.prod.yml        ovh:"$DEPLOY_PATH/docker-compose.prod.yml"
+          scp ./prometheus/prometheus.yml      ovh:"$DEPLOY_PATH/prometheus/prometheus.yml"
+          scp ./fluentd/fluent.conf            ovh:"$DEPLOY_PATH/fluentd/fluent.conf"
+          scp -r ./grafana/provisioning       ovh:"$DEPLOY_PATH/grafana/"
+
+      - name: Pull images and restart on OVH
+        env:
+          DEPLOY_PATH: ${{ secrets.OVH_DEPLOY_PATH }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.tag }}
+          GHCR_OWNER: ${{ needs.build-and-push.outputs.owner_lc }}
+        run: |
+          ssh ovh bash -s <<EOF
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          # Login ghcr optionnel (rafraîchi si les secrets GHCR_PULL_* sont définis).
+          if [ -n "${{ secrets.GHCR_PULL_TOKEN }}" ]; then
+            echo "${{ secrets.GHCR_PULL_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_PULL_USER }}" --password-stdin
+          fi
+          export GHCR_OWNER="$GHCR_OWNER"
+          export IMAGE_TAG="$IMAGE_TAG"
+          docker compose -f docker-compose.prod.yml pull
+          docker compose -f docker-compose.prod.yml up -d --remove-orphans
+          # Nettoie les anciennes images non taguées pour préserver le disque
+          docker image prune -f
+          EOF

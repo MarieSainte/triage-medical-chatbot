@@ -1,4 +1,19 @@
-version: '3.8'
+# Compose de PRODUCTION pour la VM OVH (mutualisée avec le serveur neurova).
+# Le workflow .github/workflows/deploy-ovh.yml copie ce fichier (+ les configs
+# prometheus/fluentd/grafana) sur la VM, puis lance `docker compose pull && up -d`.
+#
+# Différences avec le compose de dev :
+#   * api / interface / fluentd sont PULL depuis ghcr.io (build fait en CI,
+#     pas sur la VM).
+#   * vllm est derrière le profil "local-vllm" :
+#       - Option A (tout sur OVH)  : COMPOSE_PROFILES=local-vllm dans le .env
+#         → vLLM CPU tourne sur la VM et télécharge le modèle depuis HF.
+#       - Option B (hybride)       : profil désactivé, VLLM_API_URL dans le
+#         .env pointe vers le pod RunPod (https://<POD_ID>-8000.proxy.runpod.net/v1).
+#   * Grafana exposé sur 3001 (le serveur neurova occupe déjà le port 3000).
+#   * Les secrets (DB_*, HF_TOKEN, GRAFANA_PASSWORD, VLLM_API_URL) viennent du
+#     .env posé à côté de ce fichier sur la VM — jamais commité, jamais touché
+#     par la CI.
 
 services:
 
@@ -7,9 +22,10 @@ services:
   # ----------------------------------------------------------
   db:
     image: postgres:15-alpine
+    container_name: medical-db
     environment:
       POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?doit etre defini dans le .env}
       POSTGRES_DB: ${DB_NAME}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -18,33 +34,36 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # ----------------------------------------------------------
-  # Serveur vLLM — modele fusionne local (qwen3-1.7b-dpo-merged)
+  # Serveur vLLM CPU — uniquement en Option A (profil local-vllm)
+  # Image CPU officielle vLLM (AVX512F recommandé, AVX2 = perfs réduites).
+  # Le modèle fusionné est tiré directement du repo HF privé au premier
+  # démarrage (cache persisté dans le volume hf_cache).
   # ----------------------------------------------------------
   vllm:
-    image: vllm/vllm-openai:latest
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
+    profiles: [ "local-vllm" ]
+    image: vllm/vllm-openai-cpu:v0.24.0-x86_64
+    container_name: medical-vllm
+    environment:
+      # Pas de :? ici — Compose interpole tout le fichier même quand le
+      # profil est inactif, ce qui casserait l'Option B. En Option A,
+      # HF_TOKEN doit être défini dans le .env (repo HF privé).
+      - HF_TOKEN=${HF_TOKEN:-}
+      # KV cache en GiB — volontairement bas pour cohabiter avec neurova + ELK
+      - VLLM_CPU_KVCACHE_SPACE=${VLLM_CPU_KVCACHE_SPACE:-2}
     volumes:
-      # Bind mount du modele fusionne local (float32, pret pour vLLM)
-      - ./production_model:/app/model
+      - hf_cache:/root/.cache/huggingface
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     command:
       - --model
-      - /app/model
+      - huggingjojo/medical-chatbot-model
       - --dtype
-      - float16
+      - bfloat16
       - --max-model-len
       - "2048"
-      - --gpu-memory-utilization
-      - "0.75"
       - --enforce-eager
       - --port
       - "8000"
@@ -56,23 +75,26 @@ services:
       test: [ "CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1" ]
       interval: 30s
       timeout: 10s
-      retries: 10
-      start_period: 180s
+      retries: 20
+      # premier boot = téléchargement du modèle (~7 Go) + chargement CPU
+      start_period: 900s
+    restart: unless-stopped
 
   # ----------------------------------------------------------
-  # API FastAPI
+  # API FastAPI — image construite en CI
+  # Pas de depends_on sur vllm : en Option B il n'existe pas dans ce
+  # compose (l'API pointe vers RunPod via VLLM_API_URL).
   # ----------------------------------------------------------
   api:
-    build: ./api
+    image: ghcr.io/${GHCR_OWNER}/medical-chatbot-api:${IMAGE_TAG:-latest}
+    container_name: medical-api
     ports:
       - "8080:8080"
     environment:
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
-      - VLLM_API_URL=http://vllm:8000/v1
+      - VLLM_API_URL=${VLLM_API_URL:-http://vllm:8000/v1}
     depends_on:
       db:
-        condition: service_healthy
-      vllm:
         condition: service_healthy
     logging:
       driver: fluentd
@@ -80,14 +102,14 @@ services:
         fluentd-address: "localhost:24224"
         fluentd-async: "true"
         tag: "medical.api"
+    restart: unless-stopped
 
   # ----------------------------------------------------------
-  # Interface Streamlit
+  # Interface Streamlit — image construite en CI
   # ----------------------------------------------------------
   interface:
-    build:
-      context: .
-      dockerfile: interface/Dockerfile
+    image: ghcr.io/${GHCR_OWNER}/medical-chatbot-interface:${IMAGE_TAG:-latest}
+    container_name: medical-interface
     ports:
       - "8501:8501"
     environment:
@@ -100,38 +122,45 @@ services:
         fluentd-address: "localhost:24224"
         fluentd-async: "true"
         tag: "medical.interface"
+    restart: unless-stopped
 
   # ----------------------------------------------------------
-  # Prometheus — collecte des métriques
+  # Prometheus — collecte des métriques (port non publié, accès via Grafana)
   # ----------------------------------------------------------
   prometheus:
     image: prom/prometheus:latest
+    container_name: medical-prometheus
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=15d"
+    restart: unless-stopped
 
   # ----------------------------------------------------------
-  # Fluentd — collecte et routage des logs
+  # Fluentd — collecte et routage des logs (image custom construite en CI)
+  # Bind sur 127.0.0.1 : seul le daemon Docker local s'y connecte.
   # ----------------------------------------------------------
   fluentd:
-    build: ./fluentd
+    image: ghcr.io/${GHCR_OWNER}/medical-chatbot-fluentd:${IMAGE_TAG:-latest}
+    container_name: medical-fluentd
     ports:
-      - "24224:24224"
-      - "24224:24224/udp"
+      - "127.0.0.1:24224:24224"
+      - "127.0.0.1:24224:24224/udp"
     volumes:
       - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf
     depends_on:
       elasticsearch:
         condition: service_healthy
+    restart: unless-stopped
 
   # ----------------------------------------------------------
-  # Elasticsearch — stockage et indexation des logs
+  # Elasticsearch — stockage des logs (heap volontairement limité)
   # ----------------------------------------------------------
   elasticsearch:
     image: elasticsearch:8.11.0
+    container_name: medical-elasticsearch
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -144,14 +173,16 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    restart: unless-stopped
 
   # ----------------------------------------------------------
-  # Grafana — visualisation des logs et métriques
+  # Grafana — port hôte 3001 (3000 déjà pris par neurova-server)
   # ----------------------------------------------------------
   grafana:
     image: grafana/grafana:latest
+    container_name: medical-grafana
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -163,11 +194,11 @@ services:
         condition: service_healthy
       prometheus:
         condition: service_started
+    restart: unless-stopped
 
 volumes:
   pgdata:
   hf_cache:
-  lora_cache:
   esdata:
   grafana_data:
   prometheus_data:
