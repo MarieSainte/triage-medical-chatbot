@@ -4,8 +4,19 @@ import re
 import os
 from pathlib import Path
 
-# Chargement du JSON DSPY
-_DSPY_JSON = Path(__file__).resolve().parent / "dspy_optimized_triage_sft.json"
+_DSPY_DIR = Path(__file__).resolve().parent
+_DSPY_PROFILE = os.getenv("DSPY_PROFILE", "sft").lower()
+_DSPY_PROMPT_FILE = os.getenv("DSPY_PROMPT_FILE")
+
+# Par defaut, on utilise le prompt DSPy SFT valide sur la gate CI. Un override
+# explicite reste possible par variable d'environnement pour cibler le DPO ou
+# un autre fichier JSON sans reedition du code.
+if _DSPY_PROMPT_FILE:
+    _DSPY_JSON = Path(_DSPY_PROMPT_FILE)
+    if not _DSPY_JSON.is_absolute():
+        _DSPY_JSON = _DSPY_DIR / _DSPY_JSON
+else:
+    _DSPY_JSON = _DSPY_DIR / f"dspy_optimized_triage_{_DSPY_PROFILE}.json"
 
 _DEFAULT_SYSTEM_PROMPT = (
     "Tu es un medecin urgentiste charge de trier des situations cliniques.\n"
@@ -33,23 +44,14 @@ _DEMOS = _CONFIG.get("demos", [])
 
 def _build_messages(symptomes: str) -> list:
     """
-    Construit les messages pour l'appel LM directement (sans dspy.Predict).
-    Injecte le system prompt optimisé + démos few-shot en tant que turns
-    assistants dans l'historique, pour coller au format d'entraînement du modèle.
+    Construit les messages pour l'appel LM.
+    Le system prompt contient déjà les exemples en texte — ne pas réinjecter
+    les démos comme turns conversation (le modèle SFT les a vus à l'entraînement).
     """
-    messages = [{"role": "system", "content": OPTIMIZED_SYSTEM_PROMPT}]
-
-    # Few-shot : on rejoue les démos comme exemples user/assistant
-    for demo in _DEMOS:
-        s = demo.get("symptomes", "")
-        r = demo.get("reponse", "")
-        if s and r:
-            messages.append({"role": "user",      "content": s})
-            messages.append({"role": "assistant", "content": r})
-
-    # Tour courant
-    messages.append({"role": "user", "content": symptomes})
-    return messages
+    return [
+        {"role": "system", "content": OPTIMIZED_SYSTEM_PROMPT},
+        {"role": "user", "content": symptomes},
+    ]
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -93,12 +95,6 @@ class TriageModule(dspy.Module):
             # On prépend system prompt + démos few-shot si pas déjà de system message
             if not messages or messages[0].get("role") != "system":
                 full_messages = [{"role": "system", "content": OPTIMIZED_SYSTEM_PROMPT}]
-                for demo in _DEMOS:
-                    s = demo.get("symptomes", "")
-                    r = demo.get("reponse", "")
-                    if s and r:
-                        full_messages.append({"role": "user",      "content": s})
-                        full_messages.append({"role": "assistant", "content": r})
                 full_messages.extend(messages)
             else:
                 full_messages = messages
@@ -137,4 +133,3 @@ class TriageModule(dspy.Module):
             "status": "ASSISTANT",
             "question": "Pouvez-vous me donner plus de détails sur vos symptômes ?",
         }
-

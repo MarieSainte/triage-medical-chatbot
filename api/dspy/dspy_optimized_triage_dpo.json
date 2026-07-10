@@ -22,9 +22,5 @@
       "symptomes": "Je me suis tordu la cheville au foot, elle a double de volume et je ne peux plus poser le pied.",
       "reponse": "{\"type\": \"final\", \"question\": null, \"urgence\": \"Haute\", \"analyse\": \"Douleur intense, épaississement de la cheville, impossibilité de poser le pied. **Urgence haute** : risque d'infarctus ischémique (torture de la cheville) ou de fracture. **Consultation immédiate** (orthopédie/traumatologie) recommandée. **Prise en charge** : immobilisation, anti-inflammatoires, hémostatique si nécessaire.\"}"
     }
-  ],
-  "usage": {
-    "description": "Charger ce fichier et utiliser 'system_prompt' comme system message.",
-    "example_python": "import json\nprog = json.load(open('dspy_optimized_triage_sft.json'))\nmessages = [\n    {'role': 'system', 'content': prog['system_prompt']},\n    {'role': 'user',   'content': '### USER\\nJe tousse depuis 3 jours.'},\n]\n# -> passer messages au modele Qwen + LoRA"
-  }
+  ]
 }

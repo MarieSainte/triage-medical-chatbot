@@ -74,8 +74,7 @@ with tab_chat:
 
     st.markdown("---")
 
-    # Zone de messages avec hauteur fixe pour ancrer le chat_input en bas
-    chat_container = st.container(height=520, border=False)
+    chat_container = st.container()
     with chat_container:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):

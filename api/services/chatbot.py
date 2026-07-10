@@ -43,7 +43,7 @@ def generate_triage(symptomes: str = None, messages: list = None) -> dict:
     """
     Appelle le modèle d'IA.
     - messages : liste ChatML [{"role": "user"|"assistant", "content": "..."}]
-    - symptomes : texte brut (rétrocompatibilité)
+    - symptomes : texte brut 
     """
     start_time = time.time()
     try:
