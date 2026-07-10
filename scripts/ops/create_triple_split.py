@@ -42,4 +42,4 @@ def create_triple_split(input_filename, dataset_name):
     print(f"\nDataset split OK : train={len(train_df)} | val={len(val_df)} | test={len(test_df)}")
 
 
-create_triple_split("data_sft_v1.0.0_reviewed", "sft")
+create_triple_split("data_sft_v1.0.0_reviewed_final_cleaned", "sft")

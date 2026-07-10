@@ -22,27 +22,33 @@ parser.add_argument(
     "--adapter",
     choices=["sft", "dpo"],
     default="sft",
-    help="Adapteur LoRA : 'sft' (modele_final_lora) ou 'dpo' (modele_final_DPO/modele_dpo_lora)"
+    help="Source modèle : 'sft' charge le LoRA SFT, 'dpo' charge le LoRA DPO."
+)
+parser.add_argument(
+    "--adapter-path",
+    default=None,
+    help="Chemin explicite vers le modèle à charger (prioritaire sur le mapping par défaut)"
 )
 args = parser.parse_args()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 ADAPTER_PATHS = {
-    "sft": BASE_DIR / "models" / "unsloth_sft_lora_2026-04-14_16-11",
-    "dpo": BASE_DIR / "models" / "unsloth_dpo_lora_2026-04-15_03-21" / "checkpoint-60",
+    "sft": BASE_DIR / "models" / "unsloth_sft_lora_2026-04-24_12-36",
+    # Flux Unsloth "base Qwen + LoRA" (evite les erreurs de chargement du modele merge).
+    "dpo": BASE_DIR / "models" / "unsloth_dpo_lora_2026-07-10_12-45",
 }
 
 BASE_MODEL_ID = "Qwen/Qwen3-1.7B-Base"
-ADAPTER_PATH   = ADAPTER_PATHS[args.adapter]
+ADAPTER_PATH   = Path(args.adapter_path) if args.adapter_path else ADAPTER_PATHS[args.adapter]
 OUTPUT_JSON    = BASE_DIR / "data" / f"dspy_optimized_triage_{args.adapter}.json"
 OUTPUT_PREVIEW = BASE_DIR / "data" / f"dspy_prompt_preview_{args.adapter}.txt"
 
-print(f"[Config] Adapteur  : {args.adapter}")
-print(f"[Config] Chemin    : {ADAPTER_PATH}")
+print(f"[Config] Profil    : {args.adapter}")
+print(f"[Config] Modèle    : {ADAPTER_PATH}")
 
 if not ADAPTER_PATH.exists():
-    print(f"[ERREUR] Adapteur introuvable : {ADAPTER_PATH}")
+    print(f"[ERREUR] Modèle introuvable : {ADAPTER_PATH}")
     sys.exit(1)
 
 # ==========================================
@@ -53,9 +59,10 @@ from unsloth import FastLanguageModel
 import torch
 
 print(f"[Model] Chargement Qwen3-1.7B + LoRA ({args.adapter})...")
+# 2048 = max-model-len de vLLM en prod (1024 tronquait le prompt system+demos).
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=str(ADAPTER_PATH),
-    max_seq_length=1024,
+    max_seq_length=2048,
     dtype=None,
     load_in_4bit=True,
     device_map="auto",
@@ -73,24 +80,28 @@ CHATML_TEMPLATE = (
 )
 tokenizer.chat_template = CHATML_TEMPLATE
 tokenizer.pad_token = tokenizer.eos_token
+
+# Ne PAS reparer les embeddings a l'inference : le modele s'arrete nativement, toute modif degrade la lecture du prompt.
+
 print("[Model] Modele charge avec succes.")
 
 
 # ==========================================
 # 3. FONCTION D'INFERENCE LOCALE
 # ==========================================
-def infer(messages: list[dict], max_new_tokens: int = 300) -> str:
-    """Execute une inference sur le modele local."""
+def infer(messages: list[dict], max_new_tokens: int = 256) -> str:
+    """Execute une inference sur le modele local (256 tokens = parite prod)."""
     input_text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer(
-        input_text, return_tensors="pt", truncation=True, max_length=1024
+        input_text, return_tensors="pt", truncation=True, max_length=2048
     ).to(model.device)
 
-    # Inclure <|im_end|> comme token d'arret 
+    # <|im_end|> ET <|endoftext|> en tokens d'arret (le modele peut emettre l'un ou l'autre).
     im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
-    stop_ids = [tokenizer.eos_token_id, im_end_id]
+    endoftext_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    stop_ids = list({tokenizer.eos_token_id, im_end_id, endoftext_id})
 
     with torch.no_grad():
         outputs = model.generate(
@@ -122,23 +133,36 @@ def infer(messages: list[dict], max_new_tokens: int = 300) -> str:
 # ==========================================
 # 4. SYSTEME DE PROMPT TRIAGE
 # ==========================================
+# System prompt EXACT du dataset SFT v2.0.0 (s'en ecarter degrade le conditionnement) + regle 4 ajoutee pour le rappel Haute.
+# Accolades simples : injecte via .replace(), pas .format().
 SYSTEM_PROMPT_TEMPLATE = """\
-Tu es un medecin urgentiste charge de trier des situations cliniques.
-Ton objectif est de decider entre deux actions :
-- POSER UNE QUESTION si les informations sont insuffisantes ou ambigues
-- DONNER UN VERDICT MEDICAL STRUCTURE si les informations sont suffisantes
-Regles :
-1. Tu dois toujours repondre au format JSON strict.
-2. Si les informations sont insuffisantes, pose UNE seule question ciblee.
-3. Si les informations sont suffisantes, donne une analyse medicale avec un niveau d'urgence.
-4. L'urgence doit etre strictement : "Haute", "Moyenne" ou "Faible".
-5. Ne jamais inclure de texte hors JSON.
-6. Sois concis, medicalement prudent et factuel.
+Tu es un médecin urgentiste chargé de trier des situations cliniques.
+Ton objectif est de décider entre deux actions :
+- POSER UNE QUESTION si les informations sont insuffisantes ou ambiguës
+- DONNER UN VERDICT MÉDICAL STRUCTURÉ si les informations sont suffisantes
+Règles :
+1. Tu dois toujours répondre au format JSON strict.
+2. Si les informations sont insuffisantes, pose UNE seule question ciblée.
+3. Si les informations sont suffisantes, donne une analyse médicale avec un niveau d'urgence.
+4. Pour les urgences manifestes (signes FAST d'AVC, douleur thoracique aiguë avec sueurs ou dyspnée, perte de connaissance), donne DIRECTEMENT le verdict Haute sans poser de question.
+5. L'urgence doit être strictement : "Haute", "Moyenne" ou "Faible".
+6. Ne jamais inclure de texte hors JSON.
+7. Sois concis, médicalement prudent et factuel.
 Format attendu :
 CAS QUESTION :
-{{"type": "question", "question": "...", "urgence": null, "analyse": null}}
+{
+  "type": "question",
+  "question": "...",
+  "urgence": null,
+  "analyse": null
+}
 CAS FINAL :
-{{"type": "final", "question": null, "urgence": "...", "analyse": "..."}}
+{
+  "type": "final",
+  "question": null,
+  "urgence": "...",
+  "analyse": "..."
+}
 {demos_block}"""
 
 
@@ -162,34 +186,47 @@ def build_system_with_demos(demos: list[dict]) -> str:
 print("[Data] Preparation du dataset gold (12 exemples)...")
 
 gold_examples = [
-    # URGENCE HAUTE
-    {"symptomes": "Douleur violente dans la poitrine, du mal a respirer et je transpire beaucoup.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Haute", "analyse": "Signes evocateurs de syndrome coronaire aigu. Appeler le 15 immediatement."}'},
-    {"symptomes": "Je vois flou d'un seul coup de l'oeil droit et j'ai une partie du visage qui semble paralysee.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Haute", "analyse": "Signes suspects d\'AVC. Appeler le 15, noter l\'heure d\'apparition."}'},
-    {"symptomes": "Ma jambe est toute rouge, gonflee et tres chaude apres une chirurgie la semaine derniere.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Haute", "analyse": "Suspicion thrombose veineuse profonde. Aller aux urgences immediatement."}'},
-    {"symptomes": "Mon enfant de 3 ans a une fievre a 40 degres et fait des convulsions.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Haute", "analyse": "Convulsions febriles enfant. Appeler le 15 immediatement."}'},
-    # URGENCE MOYENNE
-    {"symptomes": "Je me suis tordu la cheville au foot, elle a double de volume et je ne peux plus poser le pied.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Moyenne", "analyse": "Suspicion entorse grave ou fracture. Glace, immobilisation, radio < 12h."}'},
-    {"symptomes": "J'ai de la fievre depuis 3 jours a 38.8 avec des frissons et des douleurs en urinant.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Moyenne", "analyse": "Suspicion pyelonephrite. Consultation medicale dans la journee."}'},
-    # URGENCE FAIBLE
-    {"symptomes": "Je me suis coupe avec une feuille de papier, ca saigne tres peu mais ca pique.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Faible", "analyse": "Plaie superficielle sans signe de gravite. Nettoyer, desinfecter, pansement."}'},
-    {"symptomes": "J'ai un gros rhume avec le nez qui coule et un peu mal a la gorge, pas de fievre.",
-     "reponse": '{"type": "final", "question": null, "urgence": "Faible", "analyse": "Infection virale benigne. Lavage nez, repos. Consulter si fievre > 38.5."}'},
-    # QUESTION
+    # --- FRENCH: FINAL / ANALYSE ---
+    {"symptomes": "Douleur violente dans la poitrine, du mal à respirer et je transpire beaucoup.",
+     "reponse": '{"type": "final", "question": null, "urgence": "Haute", "analyse": "Signes évocateurs de syndrome coronaire aigu. Urgence absolue (SAMU/15)."}'},
+     
+    {"symptomes": "Je me suis coupé avec une feuille de papier, ça saigne très peu.",
+     "reponse": '{"type": "final", "question": null, "urgence": "Faible", "analyse": "Plaie superficielle sans signe de gravité. Nettoyer et désinfecter."}'},
+
+    # --- ENGLISH: FINAL / ANALYSE ---
+    {"symptomes": "My 3-year-old child has a fever of 40 degrees Celsius and is having a seizure.",
+     "reponse": '{"type": "final", "question": null, "urgence": "Haute", "analyse": "Febrile seizure in a child. Medical emergency. Call emergency services immediately."}'},
+     
+    {"symptomes": "I have a mild runny nose and a slight sore throat, no fever.",
+     "reponse": '{"type": "final", "question": null, "urgence": "Faible", "analyse": "Mild viral infection (common cold). Rest and hydration. Consult if fever develops."}'},
+
+    # --- FRENCH: QUESTION ---
     {"symptomes": "J'ai mal au ventre depuis ce matin.",
-     "reponse": '{"type": "question", "question": "La douleur est-elle localisee d\'un cote precis et avez-vous de la fievre ou des nausees ?", "urgence": null, "analyse": null}'},
-    {"symptomes": "J'ai des vertiges quand je me leve.",
-     "reponse": '{"type": "question", "question": "Est-ce que cela s\'accompagne d\'une perte d\'equilibre, de sifflements d\'oreilles ou de maux de tete ?", "urgence": null, "analyse": null}'},
-    {"symptomes": "Je tousse beaucoup depuis deux jours.",
-     "reponse": '{"type": "question", "question": "Votre toux est-elle grasse ou seche, et avez-vous des difficultes a reprendre votre souffle ?", "urgence": null, "analyse": null}'},
-    {"symptomes": "J'ai des plaques rouges sur le bras qui grattent.",
-     "reponse": '{"type": "question", "question": "Avez-vous mange un nouvel aliment ou utilise un nouveau produit, et ressentez-vous un gonflement du visage ?", "urgence": null, "analyse": null}'},
+     "reponse": '{"type": "question", "question": "La douleur est-elle localisée d\'un côté précis et avez-vous de la fièvre ou des nausées ?", "urgence": null, "analyse": null}'},
+     
+    {"symptomes": "J'ai des vertiges quand je me lève.",
+     "reponse": '{"type": "question", "question": "Est-ce que cela s\'accompagne d\'une perte d\'équilibre, de sifflements d\'oreilles ou de maux de tête ?", "urgence": null, "analyse": null}'},
+
+    # --- ENGLISH: QUESTION ---
+    {"symptomes": "I've been coughing a lot for the past two days.",
+     "reponse": '{"type": "question", "question": "Is your cough dry or producing mucus, and are you experiencing any shortness of breath?", "urgence": null, "analyse": null}'},
+     
+    {"symptomes": "I have red, itchy patches on my arms.",
+     "reponse": '{"type": "question", "question": "Have you eaten any new foods or used new products recently, and do you feel any swelling in your face or throat?", "urgence": null, "analyse": null}'},
+     
+    # Extra examples for validation (val_examples)
+    # FRENCH FINAL
+    {"symptomes": "J'ai de la fièvre à 38.8 depuis 3 jours avec des frissons et des douleurs en urinant.",
+     "reponse": '{"type": "final", "question": null, "urgence": "Moyenne", "analyse": "Suspicion de pyélonéphrite ou infection urinaire basse. Consultation médicale recommandée dans la journée."}'},
+    # ENGLISH FINAL
+    {"symptomes": "I twisted my ankle playing soccer, it's very swollen and I can't put any weight on it.",
+     "reponse": '{"type": "final", "question": null, "urgence": "Moyenne", "analyse": "Possible severe sprain or fracture. Apply ice, immobilize, and get an X-ray within 12 hours."}'},
+    # FRENCH QUESTION
+    {"symptomes": "Une femme de 32 ans consulte pour des douleurs abdominales intenses depuis 2 heures, associées à des nausées. Règles irrégulières.",
+     "reponse": '{"type": "question", "question": "Avez-vous eu des rapports sexuels non protégés ou un retard de règles ces dernières semaines ?", "urgence": null, "analyse": null}'},
+    # ENGLISH QUESTION
+    {"symptomes": "A 72-year-old woman is brought in for sudden confusion over the past 2 hours, no fever.",
+     "reponse": '{"type": "question", "question": "Have you noticed any recent signs of dehydration or has she started taking any new medications?", "urgence": null, "analyse": null}'},
 ]
 
 split = int(len(gold_examples) * 0.8)
@@ -230,12 +267,25 @@ def triage_metric(reponse: str) -> bool:
 # ==========================================
 print("[Bootstrap] Selection des meilleures demos...")
 
-bootstrapped_demos = []
-MAX_DEMOS = 4
+# Quotas par categorie : sans demo final/Haute dans le prompt, le modele
+# sur-questionne les urgences manifestes (rappel Haute 0.40 mesure le
+# 10/07/2026 avec un prompt 3 question + 1 final/Faible ; seuil CI 0.90).
+DEMO_QUOTAS = {"final_haute": 2, "final_autre": 1, "question": 2}
+
+
+def demo_category(reponse_gold: str) -> str:
+    gold = json.loads(reponse_gold)
+    if gold.get("type") == "question":
+        return "question"
+    return "final_haute" if gold.get("urgence") == "Haute" else "final_autre"
+
+
+demos_par_cat = {cat: [] for cat in DEMO_QUOTAS}
 
 for ex in train_examples:
-    if len(bootstrapped_demos) >= MAX_DEMOS:
-        break
+    cat = demo_category(ex["reponse"])
+    if len(demos_par_cat[cat]) >= DEMO_QUOTAS[cat]:
+        continue
 
     # Tester sur le modele sans demos d'abord
     system_base = build_system_with_demos([])
@@ -244,33 +294,66 @@ for ex in train_examples:
         {"role": "user",   "content": ex['symptomes']},
     ]
 
-    pred = infer(messages, max_new_tokens=200)
-    ok = triage_metric(pred)
+    pred = infer(messages, max_new_tokens=256)
+    # Demo valide = JSON au bon format, de longueur raisonnable (800 chars ~=
+    # p50 des reponses "final" du dataset, une demo verbeuse apprend la
+    # verbosite par mimetisme) ET CONFORME AU GOLD : sans ce dernier critere,
+    # une erreur de triage du modele (ex. final/Haute sur un cas vague)
+    # devient une demo et biaise tout le prompt vers le sur-triage.
+    format_ok = triage_metric(pred) and len(pred) <= 800
+    gold_ok = False
+    if format_ok:
+        try:
+            gold = json.loads(ex["reponse"])
+            pred_data = json.loads(pred.strip().strip("`").removeprefix("json").strip())
+            gold_ok = pred_data.get("type") == gold.get("type") and (
+                gold.get("type") != "final"
+                or pred_data.get("urgence") == gold.get("urgence")
+            )
+        except Exception:
+            gold_ok = False
+    ok = format_ok and gold_ok
 
-    status = "OK" if ok else "ECHEC"
-    print(f"  [{status}] {ex['symptomes'][:60]}...")
+    status = "OK" if ok else ("NON CONFORME GOLD" if format_ok else "ECHEC")
+    print(f"  [{status}] [{cat}] {ex['symptomes'][:60]}...")
 
     if ok:
         # Le modele repond correctement -> on ajoute comme demo
-        bootstrapped_demos.append({
+        demos_par_cat[cat].append({
             "symptomes": ex["symptomes"],
-            "reponse"  : pred, 
+            "reponse"  : pred,
         })
 
-print(f"[Bootstrap] {len(bootstrapped_demos)} demos bootstrappees sur {len(train_examples)} exemples train.")
-
-# Si on n'en a pas assez, on complète avec les gold examples
-if len(bootstrapped_demos) < 2:
-    print("[Bootstrap] Complement avec les exemples gold...")
+# Complement par categorie avec les reponses gold : le bootstrap echoue
+# precisement sur les categories ou le modele est faible (ex. final/Haute),
+# qui sont celles dont le prompt a le plus besoin.
+for cat, quota in DEMO_QUOTAS.items():
     for ex in train_examples:
-        if len(bootstrapped_demos) >= MAX_DEMOS:
+        if len(demos_par_cat[cat]) >= quota:
             break
-        already = any(d["symptomes"] == ex["symptomes"] for d in bootstrapped_demos)
-        if not already:
-            bootstrapped_demos.append({
+        if demo_category(ex["reponse"]) != cat:
+            continue
+        deja = any(
+            d["symptomes"] == ex["symptomes"]
+            for demos in demos_par_cat.values() for d in demos
+        )
+        if not deja:
+            print(f"  [GOLD] [{cat}] {ex['symptomes'][:60]}...")
+            demos_par_cat[cat].append({
                 "symptomes": ex["symptomes"],
                 "reponse"  : ex["reponse"],
             })
+
+# Haute d'abord : primaute des urgences manifestes dans le prompt
+bootstrapped_demos = (
+    demos_par_cat["final_haute"]
+    + demos_par_cat["final_autre"]
+    + demos_par_cat["question"]
+)
+
+print("[Bootstrap] " + " | ".join(
+    f"{cat}: {len(v)}/{DEMO_QUOTAS[cat]}" for cat, v in demos_par_cat.items()
+))
 
 # ==========================================
 # 8. EVALUATION VAL SET
@@ -286,8 +369,19 @@ for ex in val_examples:
         {"role": "system", "content": system_with_demos},
         {"role": "user",   "content": ex['symptomes']},
     ]
-    pred = infer(messages, max_new_tokens=200)
+    pred = infer(messages, max_new_tokens=256)
+    # format + conformite au gold (type, et urgence pour les cas final)
     ok = triage_metric(pred)
+    if ok:
+        try:
+            gold = json.loads(ex["reponse"])
+            pred_data = json.loads(pred.strip().strip("`").removeprefix("json").strip())
+            ok = pred_data.get("type") == gold.get("type") and (
+                gold.get("type") != "final"
+                or pred_data.get("urgence") == gold.get("urgence")
+            )
+        except Exception:
+            ok = False
     correct += int(ok)
 
     predictions.append({
@@ -309,7 +403,7 @@ OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
 programme = {
     "adapter":          args.adapter,
     "base_model":       BASE_MODEL_ID,
-    "adapter_path":     str(ADAPTER_PATH),
+    "model_path":       str(ADAPTER_PATH),
     "val_accuracy":     round(accuracy, 3),
     "n_demos":          len(bootstrapped_demos),
     "system_prompt":    system_with_demos,
