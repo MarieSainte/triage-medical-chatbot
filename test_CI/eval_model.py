@@ -24,14 +24,27 @@ except ImportError:
     from test_CI.eval_dataset import DATASET
     print("Dataset charge depuis test_CI.")
 
-# Import du prompt optimise DSPy + demos few-shot
+# Import du prompt optimise DSPy + demos few-shot.
+# signatures.py fait `import dspy` (absent du job CI d'eval) : si l'import echoue,
+# fallback = lecture directe du meme JSON (le prompt/demos sont de la data).
 try:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
     from api.dspy.signatures import OPTIMIZED_SYSTEM_PROMPT, _DEMOS
     print("Prompt optimise charge.")
-except Exception:
-    OPTIMIZED_SYSTEM_PROMPT = None
-    _DEMOS = []
+except Exception as e:
+    print(f"signatures.py indisponible ({e.__class__.__name__}) -> lecture directe du JSON DSPy.")
+    _profile = os.getenv("DSPY_PROFILE", "sft").lower()
+    _dspy_json = Path(__file__).resolve().parent.parent / "api" / "dspy" / f"dspy_optimized_triage_{_profile}.json"
+    try:
+        with open(_dspy_json, encoding="utf-8-sig") as f:
+            _cfg = json.load(f)
+        OPTIMIZED_SYSTEM_PROMPT = _cfg.get("system_prompt")
+        _DEMOS = _cfg.get("demos", [])
+        print("Prompt optimise charge (JSON direct).")
+    except Exception as e2:
+        print(f"Prompt optimise introuvable ({e2}) -> prompt de secours.")
+        OPTIMIZED_SYSTEM_PROMPT = None
+        _DEMOS = []
 
 # =========================
 # CONFIG
