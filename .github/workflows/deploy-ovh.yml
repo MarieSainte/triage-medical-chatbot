@@ -3,9 +3,8 @@ name: CI/CD — Deploy to OVH (VM neurova)
 # Déploiement sur la VM OVH (mutualisée avec neurova).
 # Déclencheurs : push sur main (éval + build + deploy) ou dispatch manuel.
 on:
-  # TODO: trigger push désactivé temporairement (série de push en cours) — réactiver après.
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       image_tag:
