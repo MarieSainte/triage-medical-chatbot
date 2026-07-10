@@ -56,6 +56,46 @@ THRESHOLDS = {
     "accuracy":     0.50,
 }
 
+CHATML_TEMPLATE = (
+    "{% for message in messages %}"
+    "{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>\\n'}}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}"
+    "{{'<|im_start|>assistant\\n'}}"
+    "{% endif %}"
+)
+
+
+def sanitize_local_model_json_files(model_id: str):
+    """Retire un eventuel BOM UTF-8 des fichiers JSON d'un modele local."""
+    model_path = Path(model_id)
+    if not model_path.is_dir():
+        return
+
+    fixed_files = []
+    for json_path in model_path.glob("*.json"):
+        raw = json_path.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            text = raw.decode("utf-8-sig")
+            json_path.write_text(text, encoding="utf-8")
+            fixed_files.append(json_path.name)
+
+    if fixed_files:
+        print("BOM UTF-8 retire de : " + ", ".join(sorted(fixed_files)))
+
+
+def ensure_chatml_generation_prompt(tokenizer):
+    """Force un template ChatML compatible `add_generation_prompt=True`.
+
+    Le modele merge en local peut embarquer un `chat_template.jinja` incomplet
+    (messages seulement, sans prefixe assistant). Dans ce cas, Qwen continue le
+    texte apres le dernier user au lieu de repondre en assistant JSON.
+    """
+    template = getattr(tokenizer, "chat_template", None) or ""
+    if "add_generation_prompt" not in template or "<|im_start|>assistant" not in template:
+        tokenizer.chat_template = CHATML_TEMPLATE
+        print("Chat template ChatML normalise pour l'inference.")
+
 # =========================
 # LOCAL MODEL CALLER
 # =========================
@@ -65,8 +105,10 @@ class LocalModelCaller:
         if adapter_path:
             self.ensure_adapter(adapter_path)
 
+        sanitize_local_model_json_files(model_id)
         print(f"Chargement du modele {model_id} sur CPU...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        ensure_chatml_generation_prompt(self.tokenizer)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -81,6 +123,13 @@ class LocalModelCaller:
         if adapter_path:
             print(f"Chargement de l adaptateur depuis {adapter_path}...")
             self.model = PeftModel.from_pretrained(self.model, adapter_path)
+            # NE PAS "reparer" les embeddings ChatML ici : les adaptateurs
+            # post-10/07/2026 ont ete entraines en LISANT les lignes originales
+            # (la chirurgie de train_Unsloth_sft.py n'affecte que la tete de
+            # sortie sur le chemin Unsloth) et s'arretent nativement en emettant
+            # <|endoftext|> (deja dans stop_ids). Modifier les embeddings a
+            # l'inference degrade la lecture du prompt (verifie le 10/07/2026 :
+            # sorties degenerees).
 
         self.model.eval()
 
@@ -95,7 +144,10 @@ class LocalModelCaller:
                 '{"type":"final","question":null,"urgence":"Haute|Moyenne|Faible","analyse":"..."} '
                 'ou {"type":"question","question":"...","urgence":null,"analyse":null}'
             )
-        self.demos = _DEMOS
+        # Parite prod (TriageModule) : le system prompt DSPy embarque deja les
+        # exemples en texte -> ne pas les reinjecter comme tours de conversation
+        # (sinon chaque demo est presentee deux fois au modele).
+        self.demos = [] if "Exemple" in self.system_prompt else _DEMOS
 
     def ensure_adapter(self, adapter_path: str):
         """Telecharge les matrices LoRA depuis GCS si elles sont absentes."""
@@ -138,12 +190,14 @@ class LocalModelCaller:
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
 
         im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
-        stop_ids  = [self.tokenizer.eos_token_id, im_end_id]
+        endoftext_id = self.tokenizer.convert_tokens_to_ids("<|endoftext|>")
+        stop_ids  = list({self.tokenizer.eos_token_id, im_end_id, endoftext_id})
 
+        max_new_tokens = 256
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=256,
+                max_new_tokens=max_new_tokens,
                 do_sample=False,
                 pad_token_id=self.tokenizer.eos_token_id,
                 eos_token_id=stop_ids,
@@ -153,16 +207,23 @@ class LocalModelCaller:
         generated = outputs[0][input_len:]
         response  = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
+        # Arret propre = le modele a emis un stop token avant max_new_tokens.
+        # Un modele qui n'emet jamais <|im_end|> (bug embeddings Qwen3-Base,
+        # cf. train_Unsloth_sft.py) produit du JSON valide suivi de charabia :
+        # les metriques de labels passent mais le modele est indeployable.
+        clean_stop = len(generated) < max_new_tokens and generated[-1].item() in stop_ids
+
         data = _extract_json(response)
         if data:
             if data.get("type") == "final":
                 u = str(data.get("urgence", "")).capitalize()
                 data["urgence"] = u if u in ["Haute", "Moyenne", "Faible"] else "Inconnue"
             data["_raw"] = response
+            data["_clean_stop"] = clean_stop
             return data
 
         print(f"  Pas de JSON valide : {response[:100]}...")
-        return {"type": "error", "message": "No JSON found", "_raw": response}
+        return {"type": "error", "message": "No JSON found", "_raw": response, "_clean_stop": clean_stop}
 
     def predict(self, input_text: str) -> Dict:
         return self._generate(self._build_messages(input_text))
@@ -246,6 +307,8 @@ def evaluate():
     haute_correct  = 0
     missing_fields = 0
     multiturn_used = 0
+    gen_total      = 0
+    gen_stopped    = 0
 
     print(f"\nEvaluation multi-tour sur {total} exemples (limite={CI_SAMPLE_LIMIT})")
     print("=" * 60)
@@ -256,6 +319,8 @@ def evaluate():
 
         pred  = caller.predict(sample["input"])
         turns = 1
+        gen_total   += 1
+        gen_stopped += int(pred.get("_clean_stop", False))
 
         # Tour 2 : si le modele pose une question et qu'un followup est defini
         if pred.get("type") == "question" and followup:
@@ -263,6 +328,8 @@ def evaluate():
             pred   = caller.predict_turn2(sample["input"], pred, followup)
             turns  = 2
             multiturn_used += 1
+            gen_total   += 1
+            gen_stopped += int(pred.get("_clean_stop", False))
 
         actual = (
             "question" if sample["expected_type"] == "question"
@@ -305,14 +372,25 @@ def evaluate():
         m = compute_class_metrics(confusion, label)
         print(f"{label:<12} {m['precision']:>10.2f} {m['recall']:>10.2f} {m['f1']:>10.2f}")
 
+    stop_rate = gen_stopped / gen_total if gen_total > 0 else 0.0
+
     print("\n===== RESUME =====")
     print(f"Accuracy globale : {accuracy:.2f}   (seuil {THRESHOLDS['accuracy']:.2f})")
     print(f"Rappel Haute     : {recall_haute:.2f}   (seuil {THRESHOLDS['recall_haute']:.2f})")
     print(f"Champs manquants : {missing_fields}")
     print(f"Tours multiples  : {multiturn_used} exemple(s) evalues en 2 tours")
+    print(f"Arret EOS propre : {gen_stopped}/{gen_total} generations ({stop_rate:.0%})")
 
     # ===== DECISION CI/CD =====
     failed = False
+
+    # Seuil optionnel (EOS_STOP_RATE_MIN=0.9 pour bloquer) : le modele en prod
+    # au 10 juillet 2026 n'emet jamais <|im_end|> — activer ce seuil bloquerait
+    # son redeploiement tant qu'un modele corrige n'est pas publie.
+    eos_min = float(os.getenv("EOS_STOP_RATE_MIN", "0"))
+    if stop_rate < eos_min:
+        print(f"\nBLOCAGE : taux d'arret EOS {stop_rate:.2f} < {eos_min:.2f}")
+        failed = True
 
     if recall_haute < THRESHOLDS["recall_haute"]:
         print(f"\nBLOCAGE : rappel Haute {recall_haute:.2f} < {THRESHOLDS['recall_haute']:.2f}")

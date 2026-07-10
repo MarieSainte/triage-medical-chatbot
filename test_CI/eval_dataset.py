@@ -76,11 +76,13 @@ DATASET = [
         "followup": None,
     },
     {
+        # Aligne sur le gold de generate_dspy_prompts.py (decision 10/07/2026) :
+        # plaie superficielle evidente -> verdict direct, pas de question.
         "input": "Je me suis coupé avec une feuille de papier, ça saigne très peu.",
-        "expected_type": "question",
-        "expected_urgence": None,
-        "expected_analyse": None,
-        "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?",
+        "expected_type": "final",
+        "expected_urgence": "Faible",
+        "expected_analyse": "Plaie superficielle sans signe de gravité. Nettoyer et désinfecter.",
+        "expected_question": None,
         "followup": None,
     },
 
