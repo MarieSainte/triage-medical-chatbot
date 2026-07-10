@@ -27,4 +27,12 @@ models/
 models_test/
 unsloth_compiled_cache/
 production_model/
+production_model_backup_*/
 inference/
+docs/
+.agents/
+notes/
+scripts/old/
+
+# Backups
+*.bak*
