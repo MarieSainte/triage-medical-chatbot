@@ -10,46 +10,44 @@
 flowchart TD
     subgraph DATA["Pipeline de données"]
         direction TB
-        D1[dataset_sft_qwen_final.jsonl\ndata_dpo.jsonl]
+        D1[Sources médicales\nMedQuAD + cas cliniques FR/EN]
         D2[clean_dataset.py\nclean_dpo.py]
         D3[anonymiser.py\nPresidio + spaCy FR/EN]
-        D4[reprompting.py]
-        D5[mistral_correcteur.py\nMistral Medium/Small]
-        D6[mistral_dpo.py\nStructuration urgences]
-        D7[create_triple_split.py\n80 / 10 / 10]
-        D1 --> D2 --> D3 --> D4 --> D5 --> D7
-        D1 --> D2 --> D6 --> D7
+        D4[reprompting.py\nmistral_correcteur.py]
+        D5[create_triple_split.py\n80 / 10 / 10]
+        D1 --> D2 --> D3 --> D4 --> D5
     end
 
     subgraph TRAIN["Pipeline d'entraînement"]
         direction TB
         T1[Qwen3-1.7B-Base]
-        T2[SFT — Unsloth + TRL\n3 504 exemples · 1 400 steps\nLoRA r=16]
-        T3[DPO — Unsloth + TRL\n241 paires · 60 steps\nLoRA r=16  beta=0.1]
-        T4[generate_dspy_prompts.py\nBootstrapFewShot · 4 demos]
-        T1 --> T2 --> T3 --> T4
+        T2[SFT — Unsloth + TRL\n3 816 exemples · 1 400 steps\nLoRA r=16]
+        T3[DPO — Unsloth + TRL\n404 paires · 120 steps\nLoRA r=16 · beta=0.1]
+        T4[merge_model_matrice.py\nLoRA fusionné dans la base]
+        T5[push_model_to_hf.py\nHF Hub privé]
+        T1 --> T2 --> T3 --> T4 --> T5
     end
 
     subgraph SERVE["Stack de production"]
         direction TB
-        S1[vLLM\nQwen3-1.7B + LoRA DPO\nOpenAI-compatible API]
-        S2[FastAPI\nDSPy · PostgreSQL]
-        S3[Streamlit\nInterface de demo]
+        S1[vLLM — pod GPU RunPod\nmodèle fusionné · OpenAI-compatible]
+        S2[FastAPI + DSPy\nPostgreSQL — VM cloud]
+        S3[Streamlit\nInterface de démo]
+        S4[Prometheus · Grafana\nFluentd · Elasticsearch]
         S1 --> S2 --> S3
+        S2 --> S4
     end
 
-    subgraph INFRA["Infrastructure GCP"]
-        G1[Cloud Storage\nadapter_config.json\nadapter_model.safetensors]
-        G2[Docker Compose\nVM GPU GCP]
-        G3[Artifact Registry\nImage API]
-        G4[GitHub Actions CI/CD\nbranch prod]
-        G1 -->|curl au demarrage| G2
-        G4 --> G3 --> G2
+    subgraph CICD["CI/CD — GitHub Actions"]
+        C1[Gate d'évaluation\ntest_CI/eval_model.py]
+        C2[Build images → ghcr.io]
+        C3[Déploiement SSH\ndocker compose up -d]
+        C1 --> C2 --> C3
     end
 
-    DATA -->|JSONL versions| TRAIN
-    TRAIN -->|Checkpoint LoRA| INFRA
-    INFRA --> SERVE
+    DATA -->|JSONL versionnés + HF| TRAIN
+    TRAIN -->|modèle HF privé| SERVE
+    CICD --> SERVE
 ```
 
 ---
@@ -58,32 +56,33 @@ flowchart TD
 
 | Composant | Technologie |
 |---|---|
-| Modele de base | Qwen/Qwen3-1.7B-Base |
+| Modèle de base | Qwen/Qwen3-1.7B-Base |
 | Fine-tuning | Unsloth · TRL (SFTTrainer · DPOTrainer) · LoRA (r=16) |
-| Quantisation | BitsAndBytes 4-bit (NF4) |
-| Optimisation prompts | DSPy BootstrapFewShot |
+| Quantisation (train) | BitsAndBytes 4-bit (NF4) |
+| Optimisation prompts | DSPy — bootstrap few-shot |
 | Anonymisation | Presidio · spaCy (fr_core_news_md · en_core_web_sm) |
 | Correction dataset | Mistral Medium / Small (API) |
-| Serveur de modele | vLLM (OpenAI-compatible) |
+| Serveur de modèle | vLLM (OpenAI-compatible) — pod GPU RunPod |
 | API | FastAPI · Uvicorn · SQLAlchemy · PostgreSQL |
 | Interface | Streamlit |
-| Tracking experiences | MLflow |
-| Stockage modele | Google Cloud Storage |
-| CI/CD | GitHub Actions · Google Artifact Registry |
+| Monitoring | Prometheus · Grafana · Fluentd · Elasticsearch |
+| Tracking expériences | MLflow |
+| Modèle & datasets | Hugging Face Hub (repos privés) |
+| CI/CD | GitHub Actions · ghcr.io · déploiement SSH sur VM cloud |
 | Conteneurisation | Docker · Docker Compose |
 
 ---
 
-## Format de sortie du modele
+## Format de sortie du modèle
 
-Le modele repond en **JSON strict** selon deux cas :
+Le modèle répond en **JSON strict** selon deux cas :
 
 ```json
 // Cas 1 — informations suffisantes
 {
   "type": "final",
   "urgence": "Haute | Moyenne | Faible",
-  "analyse": "Justification medicale et recommandation.",
+  "analyse": "Justification médicale et recommandation.",
   "question": null
 }
 
@@ -92,7 +91,7 @@ Le modele repond en **JSON strict** selon deux cas :
   "type": "question",
   "urgence": null,
   "analyse": null,
-  "question": "Question ciblee de clarification."
+  "question": "Question ciblée de clarification."
 }
 ```
 
@@ -105,74 +104,97 @@ medical-chatbot/
 │
 ├── api/                        # Backend FastAPI
 │   ├── controllers/            # Routes HTTP
-│   ├── dspy/                   # Module DSPy + prompts optimises
-│   │   ├── signatures.py
+│   ├── dspy/                   # Module DSPy + prompts optimisés
+│   │   ├── signatures.py       # TriageModule (profil sft par défaut)
+│   │   ├── dspy_optimized_triage_sft.json
 │   │   └── dspy_optimized_triage_dpo.json
-│   ├── services/               # Logique metier (chatbot, logs)
-│   ├── schemas/                # Modeles Pydantic
-│   ├── database/               # SQLAlchemy (modeles + session)
+│   ├── services/               # Logique métier (chatbot, logs, métriques)
+│   ├── schemas/                # Modèles Pydantic
+│   ├── database/               # SQLAlchemy (modèles + session)
 │   ├── main.py
-│   ├── requirements.txt
 │   └── Dockerfile
 │
 ├── interface/                  # Frontend Streamlit
 │   ├── app.py
 │   └── Dockerfile
 │
-├── scripts/                    # Pipeline de donnees et entrainement
-│   ├── clean_dataset.py        # Nettoyage SFT
-│   ├── clean_dpo.py            # Nettoyage DPO
-│   ├── anonymiser.py           # Anonymisation Presidio
-│   ├── reprompting.py          # Remplacement system prompt
-│   ├── mistral_correcteur.py   # Correction/validation par Mistral
-│   ├── mistral_dpo.py          # Structuration paires DPO par Mistral
-│   ├── create_triple_split.py  # Split SFT 80/10/10
-│   ├── create_triple_split_dpo.py
-│   ├── train_Unsloth_sft.py    # Entrainement SFT
-│   ├── train_Unsloth_dpo.py    # Entrainement DPO
-│   ├── generate_dspy_prompts.py# Optimisation prompts DSPy
-│   └── validateur.py           # Inspection dataset
+├── scripts/
+│   ├── dataset/                # Pipeline de données
+│   │   ├── clean_dataset.py · clean_dpo.py
+│   │   ├── anonymiser.py       # Presidio + spaCy
+│   │   ├── reprompting.py · mistral_correcteur.py · mistral_dpo.py
+│   │   ├── gen_mistral_questions.py   # cas multi-tours
+│   │   └── analyze_sft_dataset.py     # distribution des longueurs
+│   ├── training/
+│   │   ├── train_Unsloth_sft.py
+│   │   └── train_Unsloth_dpo.py
+│   ├── ops/
+│   │   ├── create_triple_split.py · create_triple_split_dpo.py
+│   │   ├── merge_model_matrice.py     # fusion LoRA -> modèle complet
+│   │   ├── push_to_hf.py              # publication datasets
+│   │   ├── push_model_to_hf.py        # publication modèle
+│   │   ├── setup_pod_native.sh        # setup vLLM sur pod RunPod
+│   │   └── update_runpod_url.sh       # repointe l'API vers le pod courant
+│   └── generate_dspy_prompts.py       # optimisation prompts DSPy
 │
-├── data/
-│   └── data_versioned/
-│       ├── sft/                # sft_{train,val,test}_v2.0.0.jsonl
-│       └── dpo/                # dpo_{train,val,test}_v1.0.0.jsonl
+├── test_CI/                    # Gate d'évaluation CI
+│   ├── eval_dataset.py         # 20 cas cliniques multi-tours FR/EN
+│   └── eval_model.py           # métriques + seuils bloquants
 │
-├── models/                     # Checkpoints LoRA locaux
-├── notebook/                   # Exploration et analyse
-├── docker-compose.yml
-├── exemples_demo.txt           # Cas de demonstration
+├── data/data_versioned/
+│   ├── sft/                    # sft_{train,val,test}_v2.0.0.jsonl
+│   └── dpo/                    # dpo_{train,val,test}_v2.0.0.jsonl
+│
+├── monitoring/ · prometheus/ · grafana/ · fluentd/   # observabilité
+├── .github/workflows/deploy-ovh.yml                  # CI/CD
+├── docker-compose.yml          # stack locale (GPU)
+├── docker-compose.prod.yml     # stack production
 └── .env.example
 ```
 
 ---
 
-## Donnees d'entrainement
+## Données d'entraînement
 
-| Dataset | Train | Val | Test | Total |
-|---|---|---|---|---|
-| SFT | 3 504 | 438 | 439 | **4 381** |
-| DPO | 241 | 30 | 31 | **302** |
+| Dataset | Train | Val | Test | Total | Repo HF (privé) |
+|---|---|---|---|---|---|
+| SFT v2.0.0 | 3 816 | 477 | 478 | **4 771** | huggingjojo/medical-bilingual-sft |
+| DPO v2.0.0 | 404 | 48 | 48 | **500** | huggingjojo/medical-bilingual-dpo |
 
-**Sources** : donnees medicales publiques (MedQuAD, cas cliniques FR/EN), enrichies et corrigees via Mistral API.
+**Sources** : données médicales publiques (MedQuAD, cas cliniques FR/EN), enrichies et corrigées via Mistral API. Bilingue FR/EN, multi-tours (question de clarification → verdict).
 
-**Pipeline de qualite** :
+**Pipeline de qualité** :
 1. Nettoyage syntaxique et structurel
-2. Anonymisation automatique (Presidio, seuil 0.8) avec bypass symptomes/traitements
-3. Remplacement du system prompt (format JSON unifie)
+2. Anonymisation automatique (Presidio, seuil 0.8) avec bypass des termes médicaux — conformité RGPD
+3. System prompt unifié injecté dans chaque exemple (le même est réutilisé à l'inférence)
 4. Correction et validation par Mistral Medium/Small
-5. Structuration des niveaux d'urgence pour les paires DPO
+5. Enrichissement multi-tours et structuration des paires DPO
+6. Split 80/10/10 reproductible, versionné
+
+---
+
+## Modèle
+
+Le modèle de production est le **fusionné SFT v2 + DPO v2** (LoRA mergé dans la base), publié sur HF privé : `huggingjojo/medical-chatbot-model`.
+
+Résultats sur la gate d'évaluation (20 cas multi-tours) :
+
+| Métrique | Valeur | Seuil |
+|---|---|---|
+| Rappel « Haute » (sécurité patient) | **1.00** (5/5) | ≥ 0.90 |
+| Accuracy globale | **0.90** (18/20) | ≥ 0.50 |
+| Arrêt EOS propre | **100 %** (22/22) | — |
+| Latence GPU (bout en bout) | P95 ≈ 1.8 s | < 5 s |
 
 ---
 
 ## Installation locale
 
-### Prerequis
+### Prérequis
 
 - Python 3.12+
-- CUDA 11.8+ · GPU NVIDIA (>= 6 Go VRAM pour inference 4-bit)
-- Docker + Docker Compose (pour le stack complet)
-- `uv` (gestionnaire de paquets)
+- CUDA 11.8+ · GPU NVIDIA (≥ 6 Go VRAM pour l'inférence 4-bit)
+- Docker + Docker Compose
 
 ### Variables d'environnement
 
@@ -183,13 +205,10 @@ DB_USER=postgres
 DB_PASSWORD=changeme
 DB_NAME=medical_chatbot
 
-MODEL_ID=Qwen/Qwen3-1.7B-Base
-VLLM_DTYPE=float16
-HF_TOKEN=hf_xxx
+HF_TOKEN=hf_xxx        # repos HF privés (modèle + datasets)
+VLLM_API_URL=http://localhost:8000/v1
 
-GCS_LORA_BASE_URL=https://storage.googleapis.com/lora-matrice/checkpoint-60
-
-MISTRAL_API_KEY=xxx   # uniquement pour les scripts de preparation des donnees
+MISTRAL_API_KEY=xxx    # uniquement pour les scripts de préparation des données
 ```
 
 ### Lancer le stack complet
@@ -203,6 +222,7 @@ docker compose up --build
 | API FastAPI | http://localhost:8080 |
 | Interface Streamlit | http://localhost:8501 |
 | Docs API (Swagger) | http://localhost:8080/docs |
+| Grafana | http://localhost:3000 |
 
 ---
 
@@ -213,70 +233,95 @@ docker compose up --build
 ```bash
 curl -X POST http://localhost:8080/triage/ask \
   -H "Content-Type: application/json" \
-  -d '{"symptomes": "Douleur thoracique violente depuis 20 minutes, transpiration, essoufflement."}'
+  -d '{"messages": [{"role": "user", "content": "Douleur thoracique violente depuis 20 minutes, transpiration, essoufflement."}]}'
 ```
 
-**Reponse — urgence haute :**
+**Réponse — urgence haute :**
 ```json
 {
   "status": "ANALYSE",
   "data": {
     "urgence": "Haute",
-    "analyse": "Tableau evocateur de syndrome coronaire aigu. Appeler le 15 immediatement."
+    "analyse": "Signes évocateurs de syndrome coronaire aigu. Urgence absolue (SAMU/15)."
   },
-  "latency": 1.23
+  "latency": 2.54
 }
 ```
 
-**Reponse — question de clarification :**
+**Réponse — question de clarification :**
 ```json
 {
   "status": "ASSISTANT",
-  "question": "La douleur est-elle localisee d'un cote precis ? Avez-vous de la fievre ?",
+  "question": "La douleur est-elle localisée d'un côté précis ? Avez-vous de la fièvre ?",
   "latency": 0.87
 }
 ```
 
 ### `GET /triage/logs`
 
-Retourne l'historique des triages enregistres en base de donnees.
+Retourne l'historique des triages enregistrés en base de données (traçabilité).
 
 ---
 
-## Pipeline d'entrainement
+## Pipeline d'entraînement
 
 ```bash
-# 1. Preparation des donnees SFT
-python scripts/clean_dataset.py
-python scripts/anonymiser.py
-python scripts/reprompting.py
-python scripts/mistral_correcteur.py
-python scripts/create_triple_split.py
+# 1. Préparation des données SFT
+python scripts/dataset/clean_dataset.py
+python scripts/dataset/anonymiser.py
+python scripts/dataset/reprompting.py
+python scripts/dataset/mistral_correcteur.py
+python scripts/ops/create_triple_split.py
 
-# 2. Entrainement SFT
-python scripts/train_Unsloth_sft.py
+# 2. Entraînement SFT
+python scripts/training/train_Unsloth_sft.py
 
-# 3. Preparation des donnees DPO
-python scripts/clean_dpo.py
-python scripts/mistral_dpo.py
-python scripts/create_triple_split_dpo.py
+# 3. Préparation des données DPO
+python scripts/dataset/clean_dpo.py
+python scripts/dataset/mistral_dpo.py
+python scripts/ops/create_triple_split_dpo.py
 
-# 4. Entrainement DPO (depuis le checkpoint SFT)
-python scripts/train_Unsloth_dpo.py
+# 4. Entraînement DPO (depuis le checkpoint SFT)
+python scripts/training/train_Unsloth_dpo.py
 
 # 5. Optimisation des prompts DSPy
-python scripts/generate_dspy_prompts.py --adapter dpo
+python scripts/generate_dspy_prompts.py --adapter sft
+
+# 6. Fusion LoRA -> modèle complet, puis publication HF
+python scripts/ops/merge_model_matrice.py
+python scripts/ops/push_model_to_hf.py
 ```
 
 ---
 
-## Deploiement GCP
+## Évaluation — gate CI
 
-Le CI/CD est declenche sur push vers la branche `prod` via GitHub Actions :
+`test_CI/eval_model.py` évalue le modèle sur 20 cas cliniques multi-tours (FR/EN, relances patient scriptées) et **bloque le déploiement** si les seuils ne sont pas atteints :
 
-1. Authentification GCP (Workload Identity Federation)
-2. Build de l'image API vers Google Artifact Registry
-3. Deploiement sur VM GPU via Docker Compose
-4. Le LoRA DPO est telecharge automatiquement depuis Cloud Storage au demarrage de vLLM
+- Rappel « Haute » ≥ 0.90 (ne jamais rater une urgence vitale)
+- Accuracy ≥ 0.50 · champs obligatoires : 0 manquant
+- Taux d'arrêt EOS propre (seuil optionnel `EOS_STOP_RATE_MIN`)
+
+```bash
+# éval complète locale (20 cas)
+EVAL_SAMPLE_LIMIT=20 MODEL_ID=production_model python test_CI/eval_model.py
+```
 
 ---
+
+## Déploiement
+
+CI/CD déclenché sur push vers `main` (`.github/workflows/deploy-ovh.yml`) :
+
+1. **Gate d'évaluation** — le modèle HF est évalué sur CPU ; échec = déploiement bloqué
+2. **Build** des images api / interface / fluentd → ghcr.io (tag = SHA du commit)
+3. **Déploiement SSH** sur la VM cloud → `docker compose pull && up -d`
+4. Rollback possible par re-dispatch manuel avec un tag antérieur
+
+**Serving du modèle** : vLLM tourne sur un pod GPU RunPod (le modèle est mis en cache sur un volume persistant). À chaque nouveau pod, une seule commande repointe l'API :
+
+```bash
+bash scripts/ops/update_runpod_url.sh <POD_ID>
+```
+
+Une alternative CPU existe via le profil compose `local-vllm` (vLLM CPU sur la VM), écartée en pratique pour cause de latence.
