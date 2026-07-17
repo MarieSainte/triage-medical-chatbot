@@ -50,6 +50,20 @@ merged_model.config.pad_token_id = endoftext_id
 merged_model.generation_config.eos_token_id = [im_end_id, endoftext_id]
 merged_model.generation_config.pad_token_id = endoftext_id
 
+# 3. Chat template ChatML COMPLET. Le template herite du checkpoint LoRA ne
+# gere PAS add_generation_prompt (pas de prefixe assistant) : a l'inference, le
+# modele "continue" le texte du user au lieu de repondre. On ecrit ici le
+# template complet, identique au format d'entrainement, pour que le modele
+# publie (HF -> vLLM -> gate CI) soit correct a la source, sans rustine runtime.
+# NB : doit rester identique a la constante CHATML de test_CI/eval_model.py.
+print("[Fix] chat_template ChatML complet (add_generation_prompt)...")
+tokenizer.chat_template = (
+    "{% for message in messages %}"
+    "{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>\\n'}}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{'<|im_start|>assistant\\n'}}{% endif %}"
+)
+
 print(f"[5/5] Sauvegarde du modèle fusionné dans : {OUTPUT_DIR}...")
 merged_model.save_pretrained(OUTPUT_DIR, safe_serialization=True)
 tokenizer.save_pretrained(OUTPUT_DIR)

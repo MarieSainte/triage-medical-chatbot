@@ -1,7 +1,7 @@
 name: CI/CD — Deploy to OVH (VM neurova)
 
-# Déploiement sur la VM OVH (mutualisée avec neurova).
-# Déclencheurs : push sur main (éval + build + deploy) ou dispatch manuel.
+# Déploiement sur la VM OVH
+# Déclencheurs : push sur main (éval + build + deploy)
 on:
   push:
     branches: [main]
@@ -13,7 +13,7 @@ on:
         default: ''
 
 jobs:
-  # Gate qualité : éval du modèle fusionné HF sur CPU (ADAPTER_PATH=NONE, poids déjà fusionnés).
+  # Gate qualité : éval du modèle fusionné HF sur CPU.
   evaluate:
     runs-on: ubuntu-latest
     steps:
@@ -24,14 +24,13 @@ jobs:
         env:
           MODEL_ID: huggingjojo/medical-chatbot-model
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          ADAPTER_PATH: "NONE"
           EVAL_SAMPLE_LIMIT: "5"
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install transformers peft accelerate safetensors requests
+          pip install transformers accelerate safetensors
           python test_CI/eval_model.py
 
-  # Build des 3 images → ghcr.io (la VM pull, elle ne build pas).
+  # Build des 3 images → ghcr.io.
   build-and-push:
     needs: evaluate
     runs-on: ubuntu-latest
@@ -98,7 +97,7 @@ jobs:
           cache-from: type=gha,scope=fluentd
           cache-to: type=gha,mode=max,scope=fluentd
 
-  # Déploiement SSH sur la VM OVH. Le .env vit sur la VM, jamais touché par la CI.
+  # Déploiement SSH sur la VM OVH
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest

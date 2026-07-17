@@ -9,6 +9,8 @@ from datasets import Dataset
 from trl import SFTTrainer, SFTConfig
 from unsloth import FastLanguageModel
 from datetime import datetime
+import torch
+from unsloth.chat_templates import train_on_responses_only
 
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -18,7 +20,6 @@ if sys.stdout.encoding != "utf-8":
 # ==========================================
 MODE_TEST = False
 
-# 1280 couvre 97% du dataset v2.0.0 (768 tronquait 30% des exemples avant le <|im_end|> final).
 MAX_SEQ_LENGTH = 1280
 
 # racine du projet (le script est dans scripts/training/, deux niveaux sous la racine)
@@ -76,21 +77,15 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     device_map="auto"
 )
 
-# EOS = <|im_end|> (Qwen3-Base a eos=<|endoftext|>, jamais emis en ChatML) ; pad != eos sinon le collator masque l'EOS final.
-tokenizer.eos_token = "<|im_end|>"
-tokenizer.pad_token = "<|endoftext|>"
-model.config.eos_token_id = tokenizer.eos_token_id
-model.config.pad_token_id = tokenizer.pad_token_id
-# Les deux tokens de fin en stop : le fix embeddings les rend equivalents, le greedy prend le plus petit id.
+model.config.eos_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+model.config.pad_token_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
 model.generation_config.eos_token_id = [
-    tokenizer.eos_token_id,
+    tokenizer.convert_tokens_to_ids("<|im_end|>"),
     tokenizer.convert_tokens_to_ids("<|endoftext|>"),
 ]
-model.generation_config.pad_token_id = tokenizer.pad_token_id
+model.generation_config.pad_token_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
 
-# im_start/im_end jamais entraines dans Qwen3-Base -> le modele ne s'arrete pas. Copier des lignes saines avant le train (jamais a l'inference/merge).
 def fix_untrained_chatml_embeddings(model, tokenizer):
-    import torch
     emb = model.get_input_embeddings().weight
     im_start = tokenizer.convert_tokens_to_ids("<|im_start|>")
     im_end = tokenizer.convert_tokens_to_ids("<|im_end|>")
@@ -229,9 +224,7 @@ sft_config = SFTConfig(
     greater_is_better=False,
     save_total_limit=2,
     remove_unused_columns=False,
-    # packing=False : sinon les exemples se concatenent sans masquage (le modele apprend a enchainer les prompts).
     packing=False,
-    # padding_free=False : inutile avec batch 1, et TRL le refuse avec packing=False + max_length.
     padding_free=False,
     push_to_hub=False,
     hub_model_id=None,
@@ -249,7 +242,6 @@ trainer = SFTTrainer(
 )
 
 # Loss sur les reponses assistant uniquement (system/user masques a -100).
-from unsloth.chat_templates import train_on_responses_only
 trainer = train_on_responses_only(
     trainer,
     instruction_part="<|im_start|>user\n",
