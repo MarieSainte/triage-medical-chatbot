@@ -13,6 +13,9 @@ import sys
 import json
 import argparse
 from pathlib import Path
+import unsloth
+from unsloth import FastLanguageModel
+import torch
 
 # ==========================================
 # 1. ARGUMENTS CLI
@@ -54,12 +57,9 @@ if not ADAPTER_PATH.exists():
 # ==========================================
 # 2. CHARGEMENT DU MODELE LOCAL
 # ==========================================
-import unsloth
-from unsloth import FastLanguageModel
-import torch
+
 
 print(f"[Model] Chargement Qwen3-1.7B + LoRA ({args.adapter})...")
-# 2048 = max-model-len de vLLM en prod (1024 tronquait le prompt system+demos).
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=str(ADAPTER_PATH),
     max_seq_length=2048,
@@ -81,10 +81,7 @@ CHATML_TEMPLATE = (
 tokenizer.chat_template = CHATML_TEMPLATE
 tokenizer.pad_token = tokenizer.eos_token
 
-# Ne PAS reparer les embeddings a l'inference : le modele s'arrete nativement, toute modif degrade la lecture du prompt.
-
 print("[Model] Modele charge avec succes.")
-
 
 # ==========================================
 # 3. FONCTION D'INFERENCE LOCALE

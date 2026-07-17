@@ -167,4 +167,42 @@ DATASET = [
         "expected_question": "Avez-vous ressenti une douleur intense ou une sensation de brûlure lors de la coupure ?",
         "followup": None,
     },
+
+    {
+        "input": "J'ai des brûlures quand j'urine depuis 3 jours et depuis ce matin une douleur dans le bas du dos à droite, avec 38,5°C de fièvre.",
+        "expected_type": "final",
+        "expected_urgence": "Moyenne",
+        "expected_analyse": "Suspicion de pyélonéphrite aiguë : consultation dans la journée pour bilan urinaire (ECBU) et antibiothérapie adaptée.",
+        "expected_question": None,
+        "followup": None,
+    },
+    {
+        "input": "I've had a 38.5°C fever for three days with a productive cough and green phlegm. I'm tired but I breathe normally and have no chest pain.",
+        "expected_type": "final",
+        "expected_urgence": "Moyenne",
+        "expected_analyse": "Suspicion d'infection respiratoire basse (bronchite) sans détresse respiratoire : consultation médicale sous 24h.",
+        "expected_question": None,
+        "followup": None,
+    },
+    # Flux multi-tours verifie dans les DEUX sens (expected_turn1_type) :
+    # le modele DOIT poser une question au tour 1 (entree volontairement
+    # incomplete), puis rendre le bon verdict au tour 2 apres la relance.
+    {
+        "input": "J'ai un mal de tête inhabituel depuis une heure.",
+        "expected_type": "final",
+        "expected_urgence": "Haute",
+        "expected_analyse": "Céphalée en coup de tonnerre : suspicion d'hémorragie méningée, appel du 15 immédiat.",
+        "expected_question": None,
+        "expected_turn1_type": "question",
+        "followup": "C'est apparu d'un seul coup, comme un coup de tonnerre. C'est le pire mal de tête de ma vie.",
+    },
+    {
+        "input": "Mon fils de 8 ans a de la fièvre depuis hier soir.",
+        "expected_type": "final",
+        "expected_urgence": "Moyenne",
+        "expected_analyse": "Fièvre avec otalgie unilatérale chez l'enfant, état général conservé : suspicion d'otite moyenne aiguë, consultation dans la journée.",
+        "expected_question": None,
+        "expected_turn1_type": "question",
+        "followup": "Il a 38,4°C et se plaint d'une douleur à l'oreille droite depuis ce matin. Sinon il mange, boit et joue normalement.",
+    },
 ]

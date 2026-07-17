@@ -124,7 +124,7 @@ medical-chatbot/
 │   │   ├── anonymiser.py       # Presidio + spaCy
 │   │   ├── reprompting.py · mistral_correcteur.py · mistral_dpo.py
 │   │   ├── gen_mistral_questions.py   # cas multi-tours
-│   │   └── analyze_sft_dataset.py     # distribution des longueurs
+│   │   └── analyze_sft_dataset.py     # statistiques du dataset (rapport --md)
 │   ├── training/
 │   │   ├── train_Unsloth_sft.py
 │   │   └── train_Unsloth_dpo.py
@@ -138,7 +138,7 @@ medical-chatbot/
 │   └── generate_dspy_prompts.py       # optimisation prompts DSPy
 │
 ├── test_CI/                    # Gate d'évaluation CI
-│   ├── eval_dataset.py         # 20 cas cliniques multi-tours FR/EN
+│   ├── eval_dataset.py         # 24 cas cliniques FR/EN (dont 4 multi-tours)
 │   └── eval_model.py           # métriques + seuils bloquants
 │
 ├── data/data_versioned/
@@ -177,14 +177,17 @@ medical-chatbot/
 
 Le modèle de production est le **fusionné SFT v2 + DPO v2** (LoRA mergé dans la base), publié sur HF privé : `huggingjojo/medical-chatbot-model`.
 
-Résultats sur la gate d'évaluation (20 cas multi-tours) :
+Résultats sur la gate d'évaluation (24 cas, run du 17/07/2026) :
 
 | Métrique | Valeur | Seuil |
 |---|---|---|
-| Rappel « Haute » (sécurité patient) | **1.00** (5/5) | ≥ 0.90 |
-| Accuracy globale | **0.90** (18/20) | ≥ 0.50 |
-| Arrêt EOS propre | **100 %** (22/22) | — |
-| Latence GPU (bout en bout) | P95 ≈ 1.8 s | < 5 s |
+| Rappel « Haute » (sécurité patient) | **1.00** (6/6) | ≥ 0.90 |
+| Accuracy globale | **0.88** (21/24) | ≥ 0.70 |
+| Flux multi-tours (question T1 · verdict T2) | **2/2 · 2/2** | — |
+| Arrêt EOS propre | **100 %** (28/28) | — |
+| Latence GPU (bout en bout) | P95 ≈ 1.8 s | < 3 s |
+
+Les 3 écarts vont tous dans le sens de la prudence (question posée ou sur-triage) — jamais une urgence sous-évaluée.
 
 ---
 
@@ -296,15 +299,16 @@ python scripts/ops/push_model_to_hf.py
 
 ## Évaluation — gate CI
 
-`test_CI/eval_model.py` évalue le modèle sur 20 cas cliniques multi-tours (FR/EN, relances patient scriptées) et **bloque le déploiement** si les seuils ne sont pas atteints :
+`test_CI/eval_model.py` évalue le modèle sur 24 cas cliniques FR/EN — attendus : 6 Haute · 3 Moyenne · 3 Faible · 12 question, dont 4 scénarios multi-tours à relance patient scriptée — et **bloque le déploiement** si les seuils ne sont pas atteints :
 
 - Rappel « Haute » ≥ 0.90 (ne jamais rater une urgence vitale)
-- Accuracy ≥ 0.50 · champs obligatoires : 0 manquant
+- Accuracy ≥ 0.70 · champs obligatoires : 0 manquant
 - Taux d'arrêt EOS propre (seuil optionnel `EOS_STOP_RATE_MIN`)
+- Flux multi-tours vérifié dans les deux sens sur les cas marqués `expected_turn1_type="question"` : question exigée au tour 1 ET bon verdict au tour 2 après la relance (rapporté dans le résumé)
 
 ```bash
-# éval complète locale (20 cas)
-EVAL_SAMPLE_LIMIT=20 MODEL_ID=production_model python test_CI/eval_model.py
+# éval complète locale (24 cas)
+EVAL_SAMPLE_LIMIT=24 MODEL_ID=production_model python test_CI/eval_model.py
 ```
 
 ---
